@@ -13,6 +13,60 @@ The bundle is these files under the Elite Options dir
 
 ED-UP `edvr*.ini` is not in v0.
 
+## Install
+
+Download `ed-loadout.exe` from the latest
+[GitHub Release](https://github.com/gk1016/ed-loadout/releases/latest). Put it in a
+folder on your `PATH`, or run it from the Options dir. It is a console program: run it
+from PowerShell or `cmd`, not by double-clicking.
+
+Without `--options` (or the `<Bindings dir>` argument of `check-binds` and
+`restore-preset`) every command uses
+`%LOCALAPPDATA%\Frontier Developments\Elite Dangerous\Options` (and its `Bindings`
+dir) and prints the path it resolved. If `LOCALAPPDATA` is unset or that dir does not
+exist it exits 3 and names the path it tried.
+
+## Two machines
+
+On the desktop, with the game closed:
+
+```
+ed-loadout capture --out desk --machine desk
+```
+
+Copy the `desk` folder to the laptop (USB stick, network share, anything). On the
+laptop, open `desk\profile.toml` in a text editor and add a section for the laptop at
+the end. The numbers are yours to fill in: `ssaa` is the supersampling value to tune
+on the laptop's GPU (the desktop's value is in the captured fxcfg; do not assume it
+carries over), `max_fps` the frame cap you want there.
+
+```
+[machine.laptop]
+ssaa = <value to tune>
+max_fps = <frame cap>
+```
+
+Check the desktop's bindings against the controllers plugged into the laptop, giving
+the laptop's device GUIDs (or use `--from-log` after a launch that dropped a device):
+
+```
+ed-loadout check-binds --devices <GUID,GUID,...> --binds desk\files\Bindings\Custom.4.2.binds
+```
+
+Then, with the game closed, apply:
+
+```
+ed-loadout apply desk --machine laptop
+```
+
+Before writing, `apply` copies every file it is about to overwrite into
+`Options\_loadout-backup\<timestamp>\`, laid out like the Options dir. To undo, copy
+the `Graphics` and `Bindings` folders from that timestamp folder back over the ones in
+the Options dir (a file the laptop did not have before is not in the backup; delete it
+by hand if you want it gone).
+
+## Exit codes
+
 Exit codes: `0` ok / identical, `1` differences or problems found, `2` refused
 (game running) or bad arguments, `3` error.
 
@@ -22,7 +76,7 @@ The examples below run against the devmachine02 corpus in `fixtures/devmachine02
 ## capture
 
 ```
-ed-loadout capture --options <Options dir> --out <profile dir> --machine <name>
+ed-loadout capture [--options <Options dir>] --out <profile dir> --machine <name>
 ```
 
 Copies the bundle byte-for-byte (line endings untouched) into `<profile>/files/` and
@@ -63,7 +117,7 @@ Graphics/Custom.4.4.fxcfg: SSAAMultiplier 1.500000 -> 1.250000
 ## check-binds
 
 ```
-ed-loadout check-binds <Bindings dir> (--devices <GUID,...> | --from-log) [--binds <file>]
+ed-loadout check-binds [<Bindings dir>] (--devices <GUID,...> | --from-log) [--binds <file>]
 ```
 
 Elite rewrites `StartPreset.4.start` when a bound device is missing at launch, so that
@@ -94,7 +148,7 @@ warning: StartPreset.4.start line 4: "KeyboardMouseOnly", not Custom
 ## restore-preset
 
 ```
-ed-loadout restore-preset <Bindings dir> [--preset Custom]
+ed-loadout restore-preset [<Bindings dir>] [--preset Custom]
 ```
 
 Copies `StartPreset.4.start` to `StartPreset.4.start.bak-<timestamp>`, then rewrites it
@@ -109,7 +163,7 @@ wrote Options/Bindings/StartPreset.4.start (Custom x4, CRLF)
 ## apply
 
 ```
-ed-loadout apply <profile> --options <Options dir> --machine <name>
+ed-loadout apply <profile> [--options <Options dir>] --machine <name>
 ```
 
 Refuses with exit 2 while `EliteDangerous64.exe` is running (checked with `tasklist`
@@ -126,6 +180,10 @@ absent is an error and nothing is written; elements are never inserted.
 | `refresh_hz` | `<DX11_RefreshRateNumerator>`, and `<DX11_RefreshRateDenominator>` set to `1` |
 | `max_fps` | `<MaxFramesPerSecond>`, and `<LimitFrameRate>` set to `true` |
 
+The `ssaa` target is the `Graphics/Custom.<Major>.<Minor>.fxcfg` with the highest
+version, the one Elite reads; older versions left by game updates are written as
+captured. Other `Custom.*fxcfg*` names (a `.bak`, say) are ignored with a notice.
+
 Render scale is per GPU: do not copy devmachine02's SSAA 1.5 to a smaller card, give
 that machine its own `ssaa`.
 
@@ -136,6 +194,7 @@ ssaa = 1.25
 max_fps = 120
 
 $ ed-loadout apply devmachine02-profile --options Options --machine laptop
+ssaa target: Graphics/Custom.4.4.fxcfg
 override Graphics/Custom.4.4.fxcfg: SSAAMultiplier = 1.250000
 override Graphics/DisplaySettings.xml: MaxFramesPerSecond = 120
 override Graphics/DisplaySettings.xml: LimitFrameRate = true
@@ -152,5 +211,6 @@ At Supersampling >= 1.0, ED-UP labels DLSS as DLAA, and that is correct.
 
 ```
 cargo test
-cargo clippy -- -D warnings
+cargo clippy --all-targets -- -D warnings
+cargo build --release --target x86_64-pc-windows-gnu   # ed-loadout.exe, needs mingw-w64
 ```

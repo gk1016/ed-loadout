@@ -459,6 +459,11 @@ fn v01_c2_apply_ssaa_with_no_parsable_fxcfg_is_an_error() {
     assert!(!target.join("_loadout-backup").exists());
 }
 
+#[test]
+fn v01_c4_version_is_0_1_1() {
+    bin().arg("--version").assert().success().stdout("ed-loadout 0.1.1\n");
+}
+
 /// A LOCALAPPDATA root holding a fixture copy at the default Options path.
 fn local_appdata() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();

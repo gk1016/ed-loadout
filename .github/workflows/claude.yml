@@ -1,0 +1,41 @@
+# @claude on an issue comment -> claude-code-action on this repo's WSL runner
+# (shared CI HOME /home/gk1016/ci-home). The Action pushes a claude/ branch as
+# the Claude GitHub App, so the stack's build workflow runs on it. Model from
+# the comment: [fable] -> Fable (high effort), anything else -> Opus.
+# Runner labels: vars.BTS_RUNNER_WSL (JSON list), default below.
+# From gk1016/bts-template core/ (frago plan 2026-11-14-pipeline-v2 C4).
+name: claude
+
+on:
+  issue_comment:
+    types: [created]
+
+concurrency:
+  group: claude-action
+  cancel-in-progress: false
+
+jobs:
+  claude:
+    if: contains(github.event.comment.body, '@claude')
+    runs-on: ${{ fromJSON(vars.BTS_RUNNER_WSL || '["self-hosted","linux","wsl","evo-x2"]') }}
+    timeout-minutes: 75
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          branch_prefix: claude/
+          base_branch: main
+          claude_args: >-
+            --model ${{ contains(github.event.comment.body, '[fable]') && 'claude-fable-5-2 --effort high' || 'claude-opus-5-5' }}
+            --max-turns ${{ vars.BTS_CLAUDE_MAX_TURNS || 120 }}
+            --allowedTools "${{ vars.BTS_CLAUDE_TOOLS || 'Read,Glob,Grep,Edit,Write,Bash(git *),Bash(cargo test*),Bash(cargo check*),Bash(gh pr create*),Bash(gh pr view*),Bash(gh issue edit*),Bash(codex exec*),Bash(codex review*),Bash(codex login status)' }}"

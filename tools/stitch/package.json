@@ -1,0 +1,14 @@
+{
+  "name": "bts-design-options",
+  "version": "1.0.0",
+  "private": true,
+  "description": "design-options.yml: four Google Stitch mockups of one screen, written as a UI survey (gk1016/bts-template core/tools/stitch).",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "sharp": "0.35.5"
+  }
+}

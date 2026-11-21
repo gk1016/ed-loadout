@@ -1,0 +1,219 @@
+# /carbon-ui <tag> [vs <tag>] on an issue comment (gk1016 only) -> one Gemini
+# 4 Carbon critique of a UI survey (the stack's verify pass, branch
+# ui/survey-<tag>, folder _shots/uipass/survey-<tag>/ with index.md) against
+# claude/review/carbon-ui.md, posted by github-actions[bot]. /carbon-ui probe
+# <tag> asks only whether Carbon can see the pixels of one capture. agy runs as
+# a plain workflow step, never from Claude, read-only through AGY_DENY (agy
+# 1.5.7 print mode writes and runs commands without it).
+# Repo variables: BTS_RUNNER_WSL (JSON list); BTS_UI_KIND (what the captures
+# show, e.g. "a desktop application"); BTS_UI_SOURCE (UI source dir, e.g. qml);
+# BTS_UI_PROBE_SHOT (probe capture file name after "survey-<tag>-"; default:
+# the first JPG in the folder).
+# From gk1016/bts-template core/ (frago plans 2026-11-12-ui-refresh-lane, 2026-11-14-pipeline-v2).
+name: carbon-ui
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  critique:
+    if: github.event.comment.user.login == 'gk1016' && contains(github.event.comment.body, '/carbon-ui ')
+    runs-on: ${{ fromJSON(vars.BTS_RUNNER_WSL || '["self-hosted","linux","wsl","evo-x2"]') }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    env:
+      AGY: /usr/local/bin/agy
+      CARBON_MODEL: gemini-4-carbon-high
+      ISSUE: ${{ github.event.issue.number }}
+      REPO: ${{ github.repository }}
+      UI_KIND: ${{ vars.BTS_UI_KIND || 'an application' }}
+      UI_SOURCE: ${{ vars.BTS_UI_SOURCE }}
+      PROBE_SHOT: ${{ vars.BTS_UI_PROBE_SHOT }}
+      # The one place the shared CI HOME is named (frago plan 2026-11-14-pipeline-v2 C2).
+      # The agy step fills in $CI_HOME and adds every
+      # /home/gk1016/actions-runner-*/.credentials* (agy deny rules do not glob).
+      CI_HOME: /home/gk1016/ci-home
+      AGY_DENY: >-
+        {"permissions":{"deny":["write_file(/)","command(*)","command",
+        "read_file($CI_HOME)","view_file($CI_HOME)",
+        "read_file(/home/gk1016/.ssh)","view_file(/home/gk1016/.ssh)",
+        "read_file(/home/gk1016/.config)","view_file(/home/gk1016/.config)",
+        "read_file(/home/gk1016/.claude)","view_file(/home/gk1016/.claude)",
+        "read_file(/home/gk1016/.codex)","view_file(/home/gk1016/.codex)",
+        "read_file(/home/gk1016/.gemini)","view_file(/home/gk1016/.gemini)",
+        "read_file(/proc)","view_file(/proc)",
+        "read_url_content","search_web"]}}
+    steps:
+      # Parse before any checkout: the tags pick the survey branches.
+      - id: args
+        env:
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          set -euo pipefail
+          first=$(printf '%s\n' "$BODY" | tr -d '\r' | grep -m1 '^/carbon-ui' || true)
+          re='^/carbon-ui[[:space:]]+(probe[[:space:]]+)?([a-z0-9-]+)([[:space:]]+vs[[:space:]]+([a-z0-9-]+))?[[:space:]]*$'
+          if [[ ! "$first" =~ $re ]]; then
+            echo "usage: /carbon-ui [probe] <tag> [vs <tag>]; got: $first" > "$RUNNER_TEMP/reason"; exit 1
+          fi
+          probe=false; [ -n "${BASH_REMATCH[1]}" ] && probe=true
+          {
+            echo "probe=$probe"
+            echo "tag=${BASH_REMATCH[2]}"
+            echo "vs=${BASH_REMATCH[4]}"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ui/survey-${{ steps.args.outputs.tag }}
+          path: _survey/${{ steps.args.outputs.tag }}
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: _shots/uipass/survey-${{ steps.args.outputs.tag }}
+
+      - if: steps.args.outputs.vs != ''
+        uses: actions/checkout@v4
+        with:
+          ref: ui/survey-${{ steps.args.outputs.vs }}
+          path: _survey/${{ steps.args.outputs.vs }}
+          fetch-depth: 1
+          persist-credentials: false
+          sparse-checkout: _shots/uipass/survey-${{ steps.args.outputs.vs }}
+
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROBE: ${{ steps.args.outputs.probe }}
+          TAG: ${{ steps.args.outputs.tag }}
+          VS: ${{ steps.args.outputs.vs }}
+        run: |
+          set -euo pipefail
+          rel="_shots/uipass/survey-$TAG"
+          dir="$GITHUB_WORKSPACE/_survey/$TAG/$rel"
+          if [ ! -f "$dir/index.md" ]; then
+            echo "no survey index at ui/survey-$TAG:$rel/index.md" > "$RUNNER_TEMP/reason"; exit 1
+          fi
+          sha=$(git -C "_survey/$TAG" rev-parse "HEAD:$rel/index.md")
+          name="$TAG"
+          if [ -n "$VS" ]; then
+            vrel="_shots/uipass/survey-$VS"
+            [ -f "_survey/$VS/$vrel/index.md" ] || { echo "no survey index at ui/survey-$VS" > "$RUNNER_TEMP/reason"; exit 1; }
+            name="$TAG-vs-$VS"
+            sha="$sha-$(git -C "_survey/$VS" rev-parse "HEAD:$vrel/index.md" | cut -c1-12)"
+            # The earlier critique, from any issue in the repo: its findings are
+            # what the vs run marks fixed / partly / not. A plain critique of
+            # <vs> or a "<vs>-vs-<older>" one both count; newest wins. The
+            # marker must start a line: a comment that quotes the marker text
+            # (Carbon's plan critique 6841051653 did) is not a critique.
+            if [ "$PROBE" != true ]; then
+              gh api "repos/$REPO/issues/comments?per_page=100" --paginate \
+                | jq -cs --arg v "$VS" 'add | map(select(.body | test("(^|\n)<!-- carbon-ui \($v)(-vs-[^ ]+)? "))) | last // empty' \
+                > "$RUNNER_TEMP/earlier.json"
+              jq -r '.body // empty' "$RUNNER_TEMP/earlier.json" > "$RUNNER_TEMP/earlier.md"
+              echo "earlier /carbon-ui $VS critique: comment $(jq -r '.id // "none"' "$RUNNER_TEMP/earlier.json")"
+              if [ ! -s "$RUNNER_TEMP/earlier.md" ]; then
+                echo "no earlier /carbon-ui $VS critique found in this repo's issue comments" > "$RUNNER_TEMP/reason"; exit 1
+              fi
+            fi
+          fi
+          if [ "$PROBE" = true ]; then marker="<!-- carbon-ui-probe $name $sha -->"; else marker="<!-- carbon-ui $name $sha -->"; fi
+          skip=false
+          # grep without -q: it must read every page, or gh dies of SIGPIPE and
+          # pipefail reads a found marker as absent (#22).
+          if gh api "repos/$REPO/issues/$ISSUE/comments" --paginate --jq '.[].body' | grep -F -- "$marker" > /dev/null; then
+            skip=true
+            echo "$marker already posted; nothing to do" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          {
+            echo "dir=$dir"
+            echo "name=$name"
+            echo "marker=$marker"
+            echo "skip=$skip"
+          } >> "$GITHUB_OUTPUT"
+
+      # No GH_TOKEN here: agy gets nothing it could leak.
+      - id: agy
+        if: steps.plan.outputs.skip == 'false'
+        continue-on-error: true
+        env:
+          PROBE: ${{ steps.args.outputs.probe }}
+          TAG: ${{ steps.args.outputs.tag }}
+          VS: ${{ steps.args.outputs.vs }}
+          DIR: ${{ steps.plan.outputs.dir }}
+        run: |
+          set -euo pipefail
+          if [ "$PROBE" = true ]; then
+            if [ -n "$PROBE_SHOT" ]; then
+              img="$DIR/survey-$TAG-$PROBE_SHOT"
+            else
+              img=$(find "$DIR" -maxdepth 1 -name '*.jpg' | LC_ALL=C sort | head -n1)
+            fi
+            [ -n "$img" ] && [ -f "$img" ] || { echo "probe image missing: ${img:-no JPG in $DIR}" > "$RUNNER_TEMP/reason"; exit 1; }
+            prompt="Use your file-viewing tool to open this image file: $img
+          It is a screenshot of $UI_KIND. Look at the pixels, not at any source code: do not open any other file.
+          Name two UI elements you can see in the image, each with its exact on-screen text and where it sits (e.g. top-left, centre).
+          If your tools cannot show you the pixels of an image file, reply with exactly: CANNOT VIEW IMAGES"
+          else
+            vsnote=""
+            if [ -n "$VS" ]; then
+              vsnote="This is a vs run: the earlier survey is $GITHUB_WORKSPACE/_survey/$VS/_shots/uipass/survey-$VS (its index.md is below the first). Its critique is below that: mark each of its findings fixed / partly / not against the new images, as the brief says.
+          ----- index.md ($VS) -----
+          $(cat "$GITHUB_WORKSPACE/_survey/$VS/_shots/uipass/survey-$VS/index.md")
+          ----- earlier critique ($VS) -----
+          $(cat "$RUNNER_TEMP/earlier.md")"
+            fi
+            srcnote=""
+            [ -n "$UI_SOURCE" ] && srcnote=" The UI source is under $GITHUB_WORKSPACE/$UI_SOURCE."
+            prompt="$(cat claude/review/carbon-ui.md)
+
+          The survey folder is $DIR. View each image listed in its index.md by its file name in that folder.$srcnote
+          ----- index.md ($TAG) -----
+          $(cat "$DIR/index.md")
+          $vsnote"
+          fi
+          deny=$(jq -c '.permissions.deny += ($ARGS.positional | map("read_file(\(.))", "view_file(\(.))"))' \
+            --args /home/gk1016/actions-runner-*/.credentials* <<< "${AGY_DENY//\$CI_HOME/$CI_HOME}")
+          rc=0
+          "$AGY" -p "$prompt" --model "$CARBON_MODEL" --output-format json --print-timeout 20m \
+            --sandbox --add-dir . --settings "$deny" \
+            < /dev/null > "$RUNNER_TEMP/carbon.json" 2> "$RUNNER_TEMP/carbon.err" || rc=$?
+          if [ "$rc" -ne 0 ] || ! jq -e '.status == "SUCCESS" and ((.response // "") | length > 0)' "$RUNNER_TEMP/carbon.json" > /dev/null; then
+            { echo "agy rc=$rc status=$(jq -r '.status // "none"' "$RUNNER_TEMP/carbon.json" 2>/dev/null || echo unparsable)"
+              tail -n 3 "$RUNNER_TEMP/carbon.err"; } | tr '\n' ' ' | cut -c1-300 > "$RUNNER_TEMP/reason"
+            exit 1
+          fi
+          echo "usage: $(jq -c '.usage' "$RUNNER_TEMP/carbon.json") duration_s: $(jq -r '.duration_seconds' "$RUNNER_TEMP/carbon.json")" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - if: steps.plan.outputs.skip == 'false' && steps.agy.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PROBE: ${{ steps.args.outputs.probe }}
+          NAME: ${{ steps.plan.outputs.name }}
+          MARKER: ${{ steps.plan.outputs.marker }}
+        run: |
+          set -euo pipefail
+          kind="Carbon UI critique"; [ "$PROBE" = true ] && kind="Carbon UI probe"
+          {
+            echo "**$kind** of survey \`$NAME\` (\`$CARBON_MODEL\`, usage \`$(jq -c '.usage' "$RUNNER_TEMP/carbon.json")\`)"
+            echo
+            jq -r '.response' "$RUNNER_TEMP/carbon.json"
+            echo
+            echo "$MARKER"
+          } > "$RUNNER_TEMP/comment.md"
+          gh issue comment "$ISSUE" --repo "$REPO" --body-file "$RUNNER_TEMP/comment.md"
+
+      - if: failure() || steps.agy.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          reason=$(cat "$RUNNER_TEMP/reason" 2>/dev/null || echo "see run log")
+          gh issue comment "$ISSUE" --repo "$REPO" --body "reviewer carbon-ui failed: $reason ($GITHUB_SERVER_URL/$REPO/actions/runs/$GITHUB_RUN_ID)"

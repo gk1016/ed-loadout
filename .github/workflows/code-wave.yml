@@ -1,0 +1,209 @@
+# Code, headless, on the WSL runner. One comment from Graham on the lane issue
+# runs a whole wave in the repo's Code checkout (BTS_CODE_CHECKOUT, a clone of
+# its own - never a checkout a cron or a human also uses) with his own Claude
+# subscription (CLAUDE_CODE_OAUTH_TOKEN), no API key, no paste.
+#
+#   @code build claude/plans/<file>      Execute the plan end to end: branch
+#                                        code/<slug> from main, every criterion,
+#                                        report, draft PR by gk1016. build.yml
+#                                        follows on the PR as for any PR.
+#   @code release ...                    Not on this stack: a rust-only repo's
+#                                        release is its own path (ed-humint: the
+#                                        image cron on merge + the SSM pull by
+#                                        hand). The comment gets a skip line.
+#   Flags, anywhere after the command: --model <id> (default from BTS_CODE_MODEL
+#   or claude-opus-5-5).
+#
+# After the Code step: Codex reads `git diff main...HEAD` (read-only, the CI
+# home's login); its findings go in the issue comment.
+#
+# Guards, in order: comment author is gk1016; the per-checkout lock (flock on
+# BTS_CODE_CHECKOUT/.code-wave.lock, held through Code + Codex, waits up to
+# 60 min); no tracked edits in the checkout. The checkout is cloned on first use.
+#
+# Repo variables (bts-template README):
+#   BTS_CODE_CHECKOUT        Code's clone on the WSL runner (default /home/gk1016/<repo>-code)
+#   BTS_CODE_MODEL           default model id
+#   BTS_CODE_BUILD_CMD       how Code builds + tests during a wave (prose for the prompt)
+#   BTS_CODE_FORBIDDEN       what a build wave must never run
+#   BTS_CODE_DIRTY_IGNORE    regex of tracked paths the build rewrites (not "dirty")
+#   BTS_CODE_SIBLINGS        sibling checkouts the build needs, prose (e.g. ~/coriolis)
+# Linux twin of stacks/win-qt code-wave.yml (2026-11-21, for ed-humint).
+name: code-wave
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  wave:
+    if: >-
+      github.event_name == 'issue_comment' && !github.event.issue.pull_request &&
+      github.event.comment.user.login == 'gk1016' && startsWith(github.event.comment.body, '@code ')
+    runs-on: ${{ fromJSON(vars.BTS_RUNNER_WSL || '["self-hosted","linux","wsl","evo-x2"]') }}
+    timeout-minutes: 300
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    env:
+      REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      ISSUE_N: ${{ github.event.issue.number }}
+      CHECKOUT: ${{ vars.BTS_CODE_CHECKOUT || format('/home/gk1016/{0}-code', github.event.repository.name) }}
+      HOOK: ${{ secrets.DISCORD_WEBHOOK }}
+      BUILD_CMD: ${{ vars.BTS_CODE_BUILD_CMD || 'cargo check, then cargo test --workspace' }}
+      FORBIDDEN: ${{ vars.BTS_CODE_FORBIDDEN || 'any push to main, any deploy or aws/ssm command, any write against a production host' }}
+      DIRTY_IGNORE: ${{ vars.BTS_CODE_DIRTY_IGNORE || 'a^' }}
+      SIBLINGS: ${{ vars.BTS_CODE_SIBLINGS || '' }}
+    steps:
+      - id: parse
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BODY: ${{ github.event.comment.body }}
+          DEFAULT_MODEL: ${{ vars.BTS_CODE_MODEL || 'claude-opus-5-5' }}
+        run: |
+          set -u
+          skip() { echo "skip: $1"; echo "code-wave skip: $1" >> "$GITHUB_STEP_SUMMARY"; echo "go=false" >> "$GITHUB_OUTPUT"; echo "why=$1" >> "$GITHUB_OUTPUT"; exit 0; }
+          first=$(printf '%s' "$BODY" | head -n1 | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          model="$DEFAULT_MODEL"
+          if [[ "$first" =~ [[:space:]]--model[[:space:]]+([^[:space:]]+) ]]; then model="${BASH_REMATCH[1]}"; first=$(printf '%s' "$first" | sed -E 's/[[:space:]]--model[[:space:]]+[^[:space:]]+//'); fi
+          if [[ "$first" =~ ^@code[[:space:]]+build[[:space:]]+(claude/plans/[A-Za-z0-9._-]+\.md)$ ]]; then
+            kind=build; arg="${BASH_REMATCH[1]}"
+          elif [[ "$first" =~ ^@code[[:space:]]+release ]]; then
+            gh issue comment "$ISSUE_N" --repo "$REPO" --body "code-wave: this repo has no \`@code release\` - its release is its own path (see CLAUDE.md). Got: \`$first\` ($RUN_URL)"
+            skip "release is not on this stack"
+          else
+            skip "usage: '@code build claude/plans/<file>' [--model id]; got: $first"
+          fi
+          [[ "$model" =~ ^[a-z0-9.-]+$ ]] || skip "bad model id: $model"
+          echo "$kind $arg model=$model"
+          { echo "go=true"; echo "kind=$kind"; echo "arg=$arg"; echo "model=$model"; } >> "$GITHUB_OUTPUT"
+
+      # The checkout: cloned once, then fetched. The code step takes a flock on
+      # it for the whole wave (Code + Codex), so two waves on one repo queue.
+      - id: lock
+        name: checkout
+        if: steps.parse.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ ! -d "$CHECKOUT/.git" ]; then
+            mkdir -p "$(dirname "$CHECKOUT")"
+            git -c credential.helper= -c 'credential.helper=!gh auth git-credential' clone -q "https://github.com/$REPO.git" "$CHECKOUT"
+            echo "cloned $CHECKOUT"
+          fi
+          echo "held=true" >> "$GITHUB_OUTPUT"
+
+      - id: start
+        name: start notice
+        if: steps.lock.outputs.held == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARG: ${{ steps.parse.outputs.arg }}
+          MODEL: ${{ steps.parse.outputs.model }}
+        run: |
+          set -u
+          gh issue comment "$ISSUE_N" --repo "$REPO" --body "code-wave started: build $ARG ($MODEL) in \`$CHECKOUT\` on the WSL runner. It queues behind any wave already on that checkout and holds it until the finish line. $RUN_URL"
+          if [ -n "$HOOK" ]; then
+            name=${REPO#*/}
+            jq -nc --arg c "→ [$name] Code: build $ARG started on the WSL runner" '{content:$c, allowed_mentions:{parse:[]}}' | curl -sS -o /dev/null -H 'Content-Type: application/json' -d @- "$HOOK" || echo "warning: discord post failed"
+          fi
+
+      # The CLI, once per CI home, under the CI home's own npm prefix (the box's
+      # global prefix is /usr). Never an API key.
+      - id: cli
+        name: claude cli
+        if: steps.lock.outputs.held == 'true'
+        run: |
+          set -u
+          export PATH="$HOME/.npm-global/bin:$PATH"
+          if ! command -v claude >/dev/null 2>&1; then
+            npm install -g --prefix "$HOME/.npm-global" @anthropic-ai/claude-code 2>&1 | tail -n 2
+          fi
+          command -v claude >/dev/null 2>&1 || { echo "claude cli not installed"; exit 1; }
+          echo "claude $(claude --version 2>/dev/null)"
+          echo "bin=$HOME/.npm-global/bin" >> "$GITHUB_OUTPUT"
+
+      - id: code
+        name: code
+        if: steps.lock.outputs.held == 'true'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          ARG: ${{ steps.parse.outputs.arg }}
+          MODEL: ${{ steps.parse.outputs.model }}
+          NPM_BIN: ${{ steps.cli.outputs.bin }}
+        run: |
+          set -u
+          [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || { echo "secret CLAUDE_CODE_OAUTH_TOKEN is not set"; exit 1; }
+          unset ANTHROPIC_API_KEY
+          export PATH="$NPM_BIN:${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+          cd "$CHECKOUT"
+          exec 9>"$CHECKOUT/.code-wave.lock"
+          flock -w 3600 9 || { echo "checkout busy for 60 min"; exit 1; }
+          git config user.name  >/dev/null || git config user.name gk1016
+          git config user.email >/dev/null || git config user.email 44751853+gk1016@users.noreply.github.com
+          git config credential.helper '!gh auth git-credential'
+          dirty=$(git status --porcelain --untracked-files=no | grep -Ev "$DIRTY_IGNORE" || true)
+          if [ -n "$dirty" ]; then printf 'checkout has tracked edits; a human left work here:\n%s\n' "$dirty"; exit 1; fi
+          git fetch -q origin || { echo "git fetch failed"; exit 1; }
+          logs="$RUNNER_TEMP/logs"; mkdir -p "$logs"
+          git checkout -q main && git pull -q --ff-only origin main || { echo "pull main failed"; exit 1; }
+          slug=$(basename "$ARG" .md | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}-//')
+          branch="code/$slug"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then echo "$branch already exists on origin; finish or delete it first"; exit 1; fi
+          git checkout -q -b "$branch"
+          sib=""; [ -n "$SIBLINGS" ] && sib=" Sibling checkouts the build needs: $SIBLINGS."
+          prompt="You are Claude Code running headless on the EVO-X2 WSL, the sole build host, in $CHECKOUT on branch $branch (cut from main just now). There is nobody at the keyboard. This checkout is yours alone; never touch any other checkout of this repo on this machine.$sib Execute $ARG under CLAUDE.md's Execution role, with these changes to it: no interactive Plan-mode approval - read every file the plan names first, and if the plan contradicts the code, say so in the PR body and take the smallest faithful reading; the whole plan is yours (every criterion: Rust, SPA, migrations, scripts, docs); one commit per criterion referencing the plan filename; build and test with $BUILD_CMD; run the plan's verification (a local engine stood up as CLAUDE.md says, never production); never run $FORBIDDEN; never push main. When done: run the full test suite, push this branch, write claude/reports/<plan filename> and commit it here, then open a DRAFT PR against main with gh pr create --draft (title from the plan's first heading; body: criteria met with evidence, not met and why, deviations, needs-Graham items; no Closes line - the lane issue stays open) and print the PR URL on the last line as PR_URL=<url>. If a stop-and-ask condition in the plan is hit, stop, commit what is sound, open the draft PR anyway with a '## Stopped' section naming the question, and print PR_URL. Tear down any local engine you started. Never print a secret."
+          printf '%s' "$prompt" > "$logs/prompt.txt"
+          echo "running claude ($MODEL) in $CHECKOUT"
+          set +e
+          claude -p "$prompt" --model "$MODEL" --dangerously-skip-permissions --output-format text 2>&1 | tee "$logs/code.out.log" | tail -n 40
+          rc=${PIPESTATUS[0]}
+          set -e
+          pr=$(grep -Eo 'PR_URL=https://github\.com/[^ ]+/pull/[0-9]+' "$logs/code.out.log" | tail -n1 | cut -d= -f2- || true)
+          { echo "rc=$rc"; echo "pr=$pr"; echo "logs=$logs"; } >> "$GITHUB_OUTPUT"
+          # Adversarial read of the diff, read-only, the CI home's codex login, same brief as the Action.
+          out="/tmp/codex-check-$GITHUB_RUN_ID.md"
+          codex exec --sandbox read-only --ephemeral -o "$out" 'Follow claude/review/codex-adversarial.md. The change is git diff main...HEAD.' >/dev/null 2>&1 || true
+          txt=$(cat "$out" 2>/dev/null || true)
+          [ -n "$(printf '%s' "$txt" | tr -d '[:space:]')" ] || txt='codex produced no output'
+          printf '%s' "$txt" > "$logs/codex-check.md"
+          printf '%s' "$txt" | head -c 2000; echo
+          if [ -z "$pr" ]; then echo "code finished (rc $rc) without a PR_URL line"; exit 1; fi
+
+      - if: always() && steps.code.outputs.logs != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-wave-logs
+          path: ${{ steps.code.outputs.logs }}
+          if-no-files-found: warn
+
+      - id: finish
+        name: finish line
+        if: always() && steps.lock.outputs.held == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARG: ${{ steps.parse.outputs.arg }}
+          PR: ${{ steps.code.outputs.pr }}
+          LOGS: ${{ steps.code.outputs.logs }}
+          O_CODE: ${{ steps.code.outcome }}
+          O_CLI: ${{ steps.cli.outcome }}
+        run: |
+          set -u
+          name=${REPO#*/}
+          tail=""; codex=""
+          if [ -n "$LOGS" ] && [ -f "$LOGS/code.out.log" ]; then tail=$(tail -c 6000 "$LOGS/code.out.log" | sed -E 's/(gho_|sk-ant-|AQ\.)[A-Za-z0-9_.-]+/\1***/g'); fi
+          if [ -n "$LOGS" ] && [ -f "$LOGS/codex-check.md" ]; then codex=$(head -c 8000 "$LOGS/codex-check.md"); fi
+          if [ "$O_CODE" = success ]; then head="**code-wave build done**: $ARG -> $PR (draft; build follows)"; disc="Code: PR ready for review - $PR"
+          else at=code; [ "$O_CLI" = success ] || at="claude cli"; head="**code-wave build failed** at $at: $ARG"; disc="Look: code-wave build failed - $RUN_URL"; fi
+          f="$RUNNER_TEMP/code-wave-finish.md"
+          { echo "$head"; echo; echo "Run: $RUN_URL (artifact \`code-wave-logs\`: prompt, transcript, codex)";
+            [ -z "$codex" ] || { echo; echo "## Codex check"; echo "$codex"; }
+            [ -z "$tail" ] || { echo; echo "<details><summary>Code transcript (tail)</summary>"; echo; echo '```'; echo "$tail"; echo '```'; echo "</details>"; }; } > "$f"
+          gh issue comment "$ISSUE_N" --repo "$REPO" --body-file "$f"
+          if [ -n "$HOOK" ]; then
+            jq -nc --arg c "→ [$name] $disc" '{content:$c, allowed_mentions:{parse:[]}}' | curl -sS -o /dev/null -H 'Content-Type: application/json' -d @- "$HOOK" || echo "warning: discord post failed"
+          fi

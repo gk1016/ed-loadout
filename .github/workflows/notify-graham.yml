@@ -1,0 +1,164 @@
+# "Come do something" channel. Posts one line + a link to Discord via the
+# DISCORD_WEBHOOK secret, only when something needs Graham:
+#   - needs-graham added to an issue or PR  -> Decide: <the labeler's comment>
+#   - a PR marked ready for review          -> Decide: review PR #n
+#     (verify-win / verify-mac mark PRs ready with github.token, which starts
+#     no workflow: they post their own "Decide: review" line on a pass)
+#   - a /carbon-ui <a> vs <b> critique done -> Read the vs critique on #n
+#   PRs from bts/adopt and PRs titled "probe:" get no Decide line: they are
+#   pipeline housekeeping, reported on gk1016/frago#31, not Graham's to decide.
+#   - claude / carbon-* / build* / verify-* run failed -> Look: <workflow> failed on <branch>
+# plus workflow_dispatch for a hand-sent line. Every line starts [<repo name>]:
+# one Discord channel serves every repo. Read-only on GitHub: it never
+# comments, labels or edits, so it cannot trigger itself.
+# From gk1016/bts-template core/ (frago plans 2026-11-12-notify-graham, 2026-11-14-pipeline-v2).
+#
+# The vs critique comes from workflow_run, not issue_comment: carbon-ui posts
+# with github.token, and GITHUB_TOKEN events never start workflow runs.
+name: notify-graham
+
+on:
+  workflow_dispatch:
+    inputs:
+      text:
+        description: What Graham needs to do
+        required: true
+        default: "Webhook test from notify-graham. Nothing to do."
+      url:
+        description: Link
+        required: false
+        default: ""
+  issues:
+    types: [labeled]
+  pull_request:
+    types: [labeled, ready_for_review]
+  workflow_run:
+    # Names a repo does not have are ignored. carbon-audit is frago's only.
+    workflows: [claude, carbon-critique, carbon-ui, carbon-audit, build, verify-win, build-mac, verify-mac, verify-web]
+    types: [completed]
+
+jobs:
+  notify:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' && github.event.label.name == 'needs-graham') ||
+      (github.event_name == 'pull_request' && !startsWith(github.event.pull_request.title, 'probe:') &&
+        github.event.pull_request.head.ref != 'bts/adopt' &&
+        ((github.event.action == 'labeled' && github.event.label.name == 'needs-graham') || github.event.action == 'ready_for_review')) ||
+      (github.event_name == 'workflow_run' && (github.event.workflow_run.conclusion == 'failure' ||
+        (github.event.workflow_run.name == 'carbon-ui' && github.event.workflow_run.conclusion == 'success')))
+    # Job level, not workflow level (ISSUES F19): a job skipped by the if:
+    # above never enters the group, so the noise workflow_run runs every issue
+    # comment produces cannot displace a waiting ping. One post at a time, a
+    # running post is never cancelled, and a failed post just fails (no retry).
+    concurrency:
+      group: notify-graham
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      actions: read
+    steps:
+      - id: compose
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          SENDER: ${{ github.event.sender.login }}
+          IN_TEXT: ${{ inputs.text }}
+          IN_URL: ${{ inputs.url }}
+          ISSUE_N: ${{ github.event.issue.number || github.event.pull_request.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title || github.event.pull_request.title }}
+          ISSUE_URL: ${{ github.event.issue.html_url || github.event.pull_request.html_url }}
+          RUN_NAME: ${{ github.event.workflow_run.name }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_STARTED: ${{ github.event.workflow_run.run_started_at }}
+          RUN_ENDED: ${{ github.event.workflow_run.updated_at }}
+        run: |
+          set -euo pipefail
+          text=""; url=""
+          case "$EVENT" in
+            workflow_dispatch)
+              text="$IN_TEXT"; url="$IN_URL" ;;
+            issues|pull_request)
+              if [ "$ACTION" = ready_for_review ]; then
+                text="Decide: review PR #$ISSUE_N (ready): $ISSUE_TITLE"
+              else
+                # The labeler's newest comment on this issue/PR says what to do.
+                body=$(gh api "repos/$REPO/issues/$ISSUE_N/comments" --paginate \
+                  | jq -rs --arg u "$SENDER" 'add // [] | map(select(.user.login == $u)) | last | .body // ""')
+                line=$(printf '%s\n' "$body" | tr -d '\r' | awk 'NF { print; exit }')
+                # claude-code-action's tracking comment is rewritten at the end
+                # of its run, after the label: it says nothing yet. Use the title.
+                if [ -z "$line" ] || { [[ "$line" == '**Claude '* ]] && [[ "$line" == *'[View job]'* ]]; }; then
+                  line="$ISSUE_TITLE"
+                fi
+                text="Decide: $line"
+              fi
+              url="$ISSUE_URL" ;;
+            workflow_run)
+              if [ "$RUN_CONCLUSION" = failure ]; then
+                # build / build-mac run on push AND pull_request: one line per
+                # failure, from the PR run, or from main.
+                if { [ "$RUN_NAME" = build ] || [ "$RUN_NAME" = build-mac ]; } && [ "$RUN_EVENT" != pull_request ] \
+                   && ! { [ "$RUN_EVENT" = push ] && [ "$RUN_BRANCH" = main ]; }; then
+                  echo "build failure on $RUN_EVENT/$RUN_BRANCH: covered by its PR run, no post"
+                  echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+                fi
+                text="Look: $RUN_NAME failed on $RUN_BRANCH"; url="$RUN_URL"
+                # claude: name the newest claude/ branch committed to while the
+                # run was going, and how far ahead of main it is (the work kept).
+                if [ "$RUN_NAME" = claude ]; then
+                  b=""; bdate=""
+                  for c in $(gh api "repos/$REPO/branches?per_page=100" --paginate --jq '.[].name | select(startswith("claude/"))'); do
+                    d=$(gh api "repos/$REPO/commits?sha=$c&per_page=1" --jq '.[0].commit.committer.date')
+                    if [[ ! "$d" < "$RUN_STARTED" ]] && [[ ! "$d" > "$RUN_ENDED" ]] && [[ "$d" > "$bdate" ]]; then b=$c; bdate=$d; fi
+                  done
+                  if [ -n "$b" ]; then
+                    n=$(gh api "repos/$REPO/compare/main...$b" --jq .ahead_by)
+                    text="Look: claude failed on main; branch $b is $n commits ahead of main"
+                  else
+                    text="Look: claude failed on main; no branch from this run"
+                  fi
+                fi
+              else
+                # carbon-ui success: a vs critique posted during this run?
+                hit=$(gh api "repos/$REPO/issues/comments?since=$RUN_STARTED&per_page=100" --paginate \
+                  | jq -cs --arg s "$RUN_STARTED" --arg e "$RUN_ENDED" 'add // []
+                      | map(select(.user.login == "github-actions[bot]" and .created_at >= $s and .created_at <= $e
+                                   and (.body | test("<!-- carbon-ui [^ ]+-vs-[^ ]+ "))))
+                      | last // empty')
+                if [ -z "$hit" ]; then
+                  echo "carbon-ui run posted no vs critique (probe, plain critique or marker skip): no post"
+                  echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+                fi
+                n=$(jq -r '.issue_url | split("/") | last' <<< "$hit")
+                text="Read the vs critique on #$n; merge PR if its rows read fixed."
+                url=$(jq -r '.html_url' <<< "$hit")
+              fi ;;
+          esac
+          text=$(printf '%s' "$text" | tr '\r\n' '  ' | cut -c1-1800)
+          printf '%s' "→ [${REPO#*/}] $text" > "$RUNNER_TEMP/text"
+          printf '%s' "$url" > "$RUNNER_TEMP/url"
+          echo "message: → [${REPO#*/}] $text"
+          echo "link: $url"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: post
+        if: steps.compose.outputs.skip == 'false'
+        env:
+          HOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          set -euo pipefail
+          test -n "$HOOK" || { echo "DISCORD_WEBHOOK is empty"; exit 1; }
+          body=$(jq -n --rawfile t "$RUNNER_TEMP/text" --rawfile u "$RUNNER_TEMP/url" \
+            '{content: (if $u == "" then $t else ($t + "\n" + $u) end), allowed_mentions: {parse: []}}')
+          code=$(curl -sS -o /tmp/resp -w '%{http_code}' -H 'Content-Type: application/json' -d "$body" "$HOOK")
+          echo "discord http $code"
+          case "$code" in 2*) ;; *) cat /tmp/resp; exit 1;; esac

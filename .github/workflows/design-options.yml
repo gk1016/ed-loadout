@@ -1,0 +1,214 @@
+# /design-options <tag> <screen> [--app <name>] -- <brief> on an issue comment
+# (gk1016 only), or workflow_dispatch with the same inputs plus the issue
+# number -> four Google Stitch mockups of that screen as a UI survey on
+# branch ui/survey-design-<tag> (folder _shots/uipass/survey-design-<tag>/,
+# JPGs + index.md, the shape verify-win writes), so /carbon-ui design-<tag>
+# critiques them unchanged. Stitch is called by tools/stitch/options.mjs as a
+# plain workflow step, never from Claude Code or Cowork. A design tag always
+# replaces its own branch (force push): a redo is the same tag again.
+# Repo variables: BTS_RUNNER_WSL (JSON list); BTS_UI_KIND (what the screen is,
+# e.g. "a desktop application"); BTS_STITCH_PROJECT, or
+# BTS_STITCH_PROJECT_<APP> with --app (Stitch project id; unset = the run
+# creates one and prints its id in the job summary for Cowork to store).
+# Secrets: STITCH_API_KEY (Stitch remote MCP, X-Goog-Api-Key).
+# From gk1016/bts-template core/ (frago plan 2026-11-15-design-options-lane).
+name: design-options
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: Issue number the Decide comment goes to
+        required: true
+      tag:
+        description: Design tag, [a-z0-9-]+ (branch ui/survey-design-<tag>)
+        required: true
+      screen:
+        description: Screen name (e.g. map)
+        required: true
+      app:
+        description: App folder in a two-app repo (e.g. FRAGO); empty for none
+        required: false
+        default: ''
+      brief:
+        description: What the screen must show
+        required: true
+
+concurrency:
+  group: design-options-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  options:
+    if: github.event_name == 'workflow_dispatch' || (github.event.comment.user.login == 'gk1016' && contains(github.event.comment.body, '/design-options '))
+    runs-on: ${{ fromJSON(vars.BTS_RUNNER_WSL || '["self-hosted","linux","wsl","evo-x2"]') }}
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      ISSUE: ${{ github.event.issue.number || inputs.issue }}
+      REPO: ${{ github.repository }}
+      UI_KIND: ${{ vars.BTS_UI_KIND || 'an application' }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      # One parser for both triggers: a dispatch is turned into the comment form.
+      - id: args
+        env:
+          EVENT: ${{ github.event_name }}
+          BODY: ${{ github.event.comment.body }}
+          IN_TAG: ${{ inputs.tag }}
+          IN_SCREEN: ${{ inputs.screen }}
+          IN_APP: ${{ inputs.app }}
+          IN_BRIEF: ${{ inputs.brief }}
+        run: |
+          set +x
+          set -euo pipefail
+          if [ "$EVENT" = workflow_dispatch ]; then
+            app=""; [ -n "$IN_APP" ] && app=" --app $IN_APP"
+            printf '/design-options %s %s%s -- %s\n' "$IN_TAG" "$IN_SCREEN" "$app" "$IN_BRIEF" > "$RUNNER_TEMP/body.txt"
+          else
+            printf '%s\n' "$BODY" | awk '/^\/design-options /{p=1} p' > "$RUNNER_TEMP/body.txt"
+          fi
+          rc=0
+          node tools/stitch/options.mjs --dry-run --body-file "$RUNNER_TEMP/body.txt" --out "$RUNNER_TEMP/parse.json" || rc=$?
+          if [ "$rc" -ne 0 ]; then jq -r '.message' "$RUNNER_TEMP/parse.json" > "$RUNNER_TEMP/reason"; exit 1; fi
+          {
+            echo "tag=$(jq -r .tag "$RUNNER_TEMP/parse.json")"
+            echo "screen=$(jq -r .screen "$RUNNER_TEMP/parse.json")"
+            echo "app=$(jq -r .app "$RUNNER_TEMP/parse.json")"
+          } >> "$GITHUB_OUTPUT"
+
+      # The key reaches this step only, as an env var, and Node only; nothing
+      # here echoes it (no set -x anywhere). BTS_STITCH_KEY_OVERRIDE (a repo
+      # variable, honoured only when set) replaces it for the forced-failure
+      # test: set it to "bad" on a throwaway repo and dispatch.
+      - id: gen
+        env:
+          STITCH_API_KEY: ${{ secrets.STITCH_API_KEY }}
+          BTS_STITCH_KEY_OVERRIDE: ${{ vars.BTS_STITCH_KEY_OVERRIDE }}
+          VARS_JSON: ${{ toJSON(vars) }}
+        run: |
+          set +x
+          set -euo pipefail
+          npm ci --prefix tools/stitch --no-audit --no-fund --loglevel=error
+          rc=0
+          node tools/stitch/options.mjs --body-file "$RUNNER_TEMP/body.txt" --out "$RUNNER_TEMP/design.json" || rc=$?
+          status=$(jq -r '.status // "error"' "$RUNNER_TEMP/design.json" 2>/dev/null || echo error)
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          if [ "$rc" -ne 0 ]; then
+            jq -r '.message // "options.mjs failed"' "$RUNNER_TEMP/design.json" > "$RUNNER_TEMP/reason" 2>/dev/null || echo "options.mjs exited $rc" > "$RUNNER_TEMP/reason"
+            exit 1
+          fi
+          jq -r '.dir' "$RUNNER_TEMP/design.json" > /dev/null
+
+      # As verify-win's publish, except that a design tag always replaces its
+      # own branch: no existing-branch guard.
+      - id: push
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.args.outputs.tag }}
+          SCREEN: ${{ steps.args.outputs.screen }}
+        run: |
+          set +x
+          set -euo pipefail
+          branch="ui/survey-design-$TAG"
+          rel="_shots/uipass/survey-design-$TAG"
+          n=$(find "$rel" -maxdepth 1 -name '*.jpg' | wc -l)
+          [ "$n" -eq 4 ] || { echo "$n JPGs in $rel, need 4" > "$RUNNER_TEMP/reason"; exit 1; }
+          [ -f "$rel/index.md" ] || { echo "no index.md in $rel" > "$RUNNER_TEMP/reason"; exit 1; }
+          wt="$RUNNER_TEMP/design-wt"
+          rm -rf "$wt"; git worktree prune
+          git worktree add -q --detach "$wt" HEAD
+          mkdir -p "$wt/$rel"
+          cp "$rel"/* "$wt/$rel/"
+          git -C "$wt" add -f -- "$rel"
+          git -C "$wt" -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+            commit -q -m "Design options $TAG: four Stitch mockups of $SCREEN + index.md (design-options, issue #$ISSUE)"
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -C "$wt" -c "http.https://github.com/.extraheader=$auth" push -q --force origin "HEAD:refs/heads/$branch"
+          git worktree remove --force "$wt"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "pushed $n JPGs + index.md to $branch" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # The ask: one comment whose first line is the Decide line, needs-graham,
+      # and Discord directly with the four JPGs attached (a label added with
+      # github.token starts no workflow, so notify-graham never sees this; same
+      # shape as verify-win's skip notice). Nothing else runs until Graham
+      # answers; "v<N>" is Cowork's cue to write the wave plan.
+      - id: notify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          TAG: ${{ steps.args.outputs.tag }}
+          SCREEN: ${{ steps.args.outputs.screen }}
+          BRANCH: ${{ steps.push.outputs.branch }}
+        run: |
+          set +x
+          set -euo pipefail
+          rel="_shots/uipass/survey-design-$TAG"
+          d="$RUNNER_TEMP/design.json"
+          issue_url="$GITHUB_SERVER_URL/$REPO/issues/$ISSUE"
+          {
+            echo "Decide: pick v1-v4 for $SCREEN (or \"none, redo with: …\")"
+            echo
+            jq -r '.files[] | "- **v\(.n)** \(.key): \(.hint) (Stitch screen `\(.screen // "?")`, \(.kb) KB)"' "$d"
+            echo
+            echo "Mockups: $GITHUB_SERVER_URL/$REPO/tree/$BRANCH/$rel"
+            jq -r 'if .created then "Stitch project `\(.project)` was created by this run: store it as repo variable `\(.projectVar)`." else "Stitch project `\(.project)` (`\(.projectVar)`)." end' "$d"
+            echo "Critique: \`/carbon-ui design-$TAG\` · run $RUN_URL"
+          } > "$RUNNER_TEMP/decide.md"
+          gh issue comment "$ISSUE" --repo "$REPO" --body-file "$RUNNER_TEMP/decide.md"
+          gh api -X POST "repos/$REPO/issues/$ISSUE/labels" -f "labels[]=needs-graham" > /dev/null
+          [ -n "$HOOK" ] || { echo "DISCORD_WEBHOOK is empty" > "$RUNNER_TEMP/reason"; exit 1; }
+          payload=$(jq -nc --arg n "${REPO#*/}" --arg s "$SCREEN" --arg i "$ISSUE" --arg u "$issue_url" \
+            '{content: "→ [\($n)] Decide: pick v1-v4 for \($s) on #\($i)\n\($u)", allowed_mentions: {parse: []}}')
+          form=(--form-string "payload_json=$payload")
+          i=0
+          for f in "$rel/survey-design-$TAG"-v[1-4].jpg; do
+            form+=(-F "files[$i]=@$f;type=image/jpeg"); i=$((i + 1))
+          done
+          [ "$i" -eq 4 ] || { echo "$i JPGs to attach, need 4" > "$RUNNER_TEMP/reason"; exit 1; }
+          # The webhook URL goes to curl as a config on stdin, never on argv.
+          code=$(printf 'url = "%s"\n' "$HOOK" | curl -sS -g -K - -o "$RUNNER_TEMP/discord.out" -w '%{http_code}' "${form[@]}") || code=000
+          echo "discord: HTTP $code, 4 attachments" | tee -a "$GITHUB_STEP_SUMMARY"
+          case "$code" in
+            200|204) ;;
+            *) echo "Discord webhook returned HTTP $code" > "$RUNNER_TEMP/reason"; exit 1 ;;
+          esac
+
+      # Stitch said 401/403: one plain line on the issue and the same line to
+      # Discord. No key in either, no retry.
+      - id: refused
+        if: failure() && steps.gen.outputs.status == 'refused'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          set +x
+          set -euo pipefail
+          line="Stitch refused (status $(jq -r '.http // "?"' "$RUNNER_TEMP/design.json"))"
+          gh issue comment "$ISSUE" --repo "$REPO" --body "$line ($RUN_URL)"
+          [ -n "$HOOK" ] || { echo "DISCORD_WEBHOOK is empty"; exit 1; }
+          payload=$(jq -nc --arg n "${REPO#*/}" --arg l "$line" --arg i "$ISSUE" --arg u "$GITHUB_SERVER_URL/$REPO/issues/$ISSUE" \
+            '{content: "→ [\($n)] \($l) on #\($i)\n\($u)", allowed_mentions: {parse: []}}')
+          code=$(printf 'url = "%s"\n' "$HOOK" | curl -sS -g -K - -o /dev/null -w '%{http_code}' \
+            -H 'Content-Type: application/json' --data-binary "$payload") || code=000
+          echo "$line; discord: HTTP $code" | tee -a "$GITHUB_STEP_SUMMARY"
+          case "$code" in 200|204) ;; *) exit 1 ;; esac
+
+      - if: failure() && steps.gen.outputs.status != 'refused'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          reason=$(cat "$RUNNER_TEMP/reason" 2>/dev/null || echo "see run log")
+          gh issue comment "$ISSUE" --repo "$REPO" --body "design-options failed: $reason ($RUN_URL)"

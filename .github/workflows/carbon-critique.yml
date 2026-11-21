@@ -1,0 +1,126 @@
+# /carbon-critique claude/plans/<file>.md on an issue comment (gk1016 only) ->
+# one Gemini 4 Carbon critique of that plan against claude/review/carbon-critique.md,
+# posted by github-actions[bot]. Runs agy as a plain workflow step (never from
+# Claude). agy is read-only only because of the deny rules in AGY_DENY: on agy
+# 1.5.7 print mode without them writes files and runs commands (measured).
+# Runner labels: vars.BTS_RUNNER_WSL (JSON list), default below.
+# From gk1016/bts-template core/ (frago plans 2026-11-12-ai-reviewers, 2026-11-14-pipeline-v2).
+name: carbon-critique
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  critique:
+    if: github.event.comment.user.login == 'gk1016' && contains(github.event.comment.body, '/carbon-critique claude/plans/')
+    runs-on: ${{ fromJSON(vars.BTS_RUNNER_WSL || '["self-hosted","linux","wsl","evo-x2"]') }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    env:
+      AGY: /usr/local/bin/agy
+      CARBON_MODEL: gemini-4-carbon-high
+      ISSUE: ${{ github.event.issue.number }}
+      REPO: ${{ github.repository }}
+      # The one place the shared CI HOME is named (frago plan 2026-11-14-pipeline-v2 C2).
+      # The agy step fills in $CI_HOME and adds every
+      # /home/gk1016/actions-runner-*/.credentials* (agy deny rules do not glob).
+      CI_HOME: /home/gk1016/ci-home
+      AGY_DENY: >-
+        {"permissions":{"deny":["write_file(/)","command(*)","command",
+        "read_file($CI_HOME)","view_file($CI_HOME)",
+        "read_file(/home/gk1016/.ssh)","view_file(/home/gk1016/.ssh)",
+        "read_file(/home/gk1016/.config)","view_file(/home/gk1016/.config)",
+        "read_file(/home/gk1016/.claude)","view_file(/home/gk1016/.claude)",
+        "read_file(/home/gk1016/.codex)","view_file(/home/gk1016/.codex)",
+        "read_file(/home/gk1016/.gemini)","view_file(/home/gk1016/.gemini)",
+        "read_file(/proc)","view_file(/proc)",
+        "read_url_content","search_web"]}}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+          persist-credentials: false
+
+      - id: plan
+        env:
+          BODY: ${{ github.event.comment.body }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          first=$(printf '%s\n' "$BODY" | tr -d '\r' | grep -m1 '^/carbon-critique' || true)
+          re='^/carbon-critique[[:space:]]+(claude/plans/[A-Za-z0-9._-]+\.md)[[:space:]]*$'
+          if [[ ! "$first" =~ $re ]]; then
+            echo "not a plan path: $first" > "$RUNNER_TEMP/reason"; exit 1
+          fi
+          path=${BASH_REMATCH[1]}
+          if [ ! -f "$path" ]; then
+            echo "no such plan on main: $path" > "$RUNNER_TEMP/reason"; exit 1
+          fi
+          sha=$(git rev-parse "HEAD:$path")
+          marker="<!-- carbon-critique $sha -->"
+          skip=false
+          if gh api "repos/$REPO/issues/$ISSUE/comments" --paginate --jq '.[].body' | grep -F -- "$marker" > /dev/null; then
+            skip=true
+            echo "critique for $path at blob $sha already posted; nothing to do" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          {
+            echo "path=$path"
+            echo "sha=$sha"
+            echo "marker=$marker"
+            echo "skip=$skip"
+          } >> "$GITHUB_OUTPUT"
+
+      # No GH_TOKEN here: agy gets nothing it could leak.
+      - id: agy
+        if: steps.plan.outputs.skip == 'false'
+        continue-on-error: true
+        env:
+          PLAN_PATH: ${{ steps.plan.outputs.path }}
+        run: |
+          set -euo pipefail
+          prompt="$(cat claude/review/carbon-critique.md)
+
+          Plan file: $PLAN_PATH
+          ----- PLAN TEXT -----
+          $(cat "$PLAN_PATH")"
+          deny=$(jq -c '.permissions.deny += ($ARGS.positional | map("read_file(\(.))", "view_file(\(.))"))' \
+            --args /home/gk1016/actions-runner-*/.credentials* <<< "${AGY_DENY//\$CI_HOME/$CI_HOME}")
+          rc=0
+          "$AGY" -p "$prompt" --model "$CARBON_MODEL" --output-format json --print-timeout 15m \
+            --sandbox --add-dir . --settings "$deny" \
+            < /dev/null > "$RUNNER_TEMP/carbon.json" 2> "$RUNNER_TEMP/carbon.err" || rc=$?
+          if [ "$rc" -ne 0 ] || ! jq -e '.status == "SUCCESS" and ((.response // "") | length > 0)' "$RUNNER_TEMP/carbon.json" > /dev/null; then
+            { echo "agy rc=$rc status=$(jq -r '.status // "none"' "$RUNNER_TEMP/carbon.json" 2>/dev/null || echo unparsable)"
+              tail -n 3 "$RUNNER_TEMP/carbon.err"; } | tr '\n' ' ' | cut -c1-300 > "$RUNNER_TEMP/reason"
+            exit 1
+          fi
+          echo "usage: $(jq -c '.usage' "$RUNNER_TEMP/carbon.json") duration_s: $(jq -r '.duration_seconds' "$RUNNER_TEMP/carbon.json")" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - if: steps.plan.outputs.skip == 'false' && steps.agy.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAN_PATH: ${{ steps.plan.outputs.path }}
+          SHA: ${{ steps.plan.outputs.sha }}
+          MARKER: ${{ steps.plan.outputs.marker }}
+        run: |
+          set -euo pipefail
+          {
+            echo "**Carbon critique** of \`$PLAN_PATH\` (blob \`${SHA:0:12}\`, \`$CARBON_MODEL\`)"
+            echo
+            jq -r '.response' "$RUNNER_TEMP/carbon.json"
+            echo
+            echo "$MARKER"
+          } > "$RUNNER_TEMP/comment.md"
+          gh issue comment "$ISSUE" --repo "$REPO" --body-file "$RUNNER_TEMP/comment.md"
+
+      - if: failure() || steps.agy.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          reason=$(cat "$RUNNER_TEMP/reason" 2>/dev/null || echo "see run log")
+          gh issue comment "$ISSUE" --repo "$REPO" --body "reviewer carbon-critique failed: $reason ($GITHUB_SERVER_URL/$REPO/actions/runs/$GITHUB_RUN_ID)"

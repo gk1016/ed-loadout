@@ -489,10 +489,16 @@ fn v01_c4_version_is_0_1_1() {
     bin().arg("--version").assert().success().stdout("ed-loadout 0.1.1\n");
 }
 
+/// `<base>/Frontier Developments/Elite Dangerous/Options`, with the
+/// platform's separators so it compares equal to what the binary prints.
+fn default_options(base: &Path) -> PathBuf {
+    base.join("Frontier Developments").join("Elite Dangerous").join("Options")
+}
+
 /// A LOCALAPPDATA root holding a fixture copy at the default Options path.
 fn local_appdata() -> (tempfile::TempDir, PathBuf) {
     let tmp = tempfile::tempdir().unwrap();
-    let opts = tmp.path().join("LocalAppData/Frontier Developments/Elite Dangerous/Options");
+    let opts = default_options(&tmp.path().join("LocalAppData"));
     copy_tree(&fixture(), &opts);
     (tmp, opts)
 }
@@ -548,7 +554,8 @@ fn v01_c3_unset_localappdata_exits_3_naming_the_path() {
     let err = String::from_utf8(err).unwrap();
     assert_eq!(err.lines().count(), 1, "{err}");
     assert!(err.contains("LOCALAPPDATA is not set"), "{err}");
-    assert!(err.contains("Frontier Developments/Elite Dangerous/Options"), "{err}");
+    let tried = default_options(Path::new("$LOCALAPPDATA"));
+    assert!(err.contains(&format!("tried {};", tried.display())), "{err}");
     assert!(!tmp.path().join("p").exists());
 }
 
@@ -564,7 +571,7 @@ fn v01_c3_missing_default_dir_exits_3_naming_the_path() {
         .stderr
         .clone();
     let err = String::from_utf8(err).unwrap();
-    let tried = tmp.path().join("Frontier Developments/Elite Dangerous/Options/Bindings");
+    let tried = default_options(tmp.path()).join("Bindings");
     assert_eq!(err, format!("error: {}: Bindings dir not found; pass the Bindings dir\n", tried.display()));
 }
 

@@ -42,8 +42,13 @@ jobs:
       github.event.comment.user.login == 'gk1016' && startsWith(github.event.comment.body, '@code ')
     runs-on: ${{ fromJSON(vars.BTS_RUNNER_WSL || '["self-hosted","linux","wsl","evo-x2"]') }}
     timeout-minutes: 300
+    # contents: write so github.token can push the code/<slug> branch: the CI
+    # home has no gh login of its own (ed-humint waves 1-2 had to improvise an
+    # SSH push; wave 3 failed with 403, 2026-11-21). Known cost: a branch pushed
+    # with github.token does not trigger build.yml on the PR; Code's own
+    # cargo test is the gate, and main builds after the merge.
     permissions:
-      contents: read
+      contents: write
       issues: write
       pull-requests: write
     env:

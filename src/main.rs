@@ -54,6 +54,15 @@ enum Cmd {
         #[arg(long)]
         binds: Option<PathBuf>,
     },
+    /// Rewrite StartPreset.4.start to four lines of the preset name (CRLF),
+    /// after backing up the old file.
+    RestorePreset {
+        /// Bindings dir (holds StartPreset.4.start).
+        bindings_dir: PathBuf,
+        /// Preset name to write on every line.
+        #[arg(long, default_value = "Custom")]
+        preset: String,
+    },
 }
 
 fn main() -> ExitCode {
@@ -64,6 +73,7 @@ fn main() -> ExitCode {
         Cmd::CheckBinds { bindings_dir, devices, from_log, binds } => {
             binds::run(&bindings_dir, devices.as_deref(), from_log, binds.as_deref())
         }
+        Cmd::RestorePreset { bindings_dir, preset } => binds::restore_preset(&bindings_dir, &preset),
     };
     match result {
         Ok(code) => ExitCode::from(code as u8),

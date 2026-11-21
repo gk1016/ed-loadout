@@ -91,6 +91,11 @@ pub fn join_rel(base: &Path, rel: &str) -> PathBuf {
     p
 }
 
+/// UTC timestamp for backup names, safe in Windows file names.
+pub fn backup_stamp() -> String {
+    chrono::Utc::now().format("%Y%m%d-%H%M%S-%3f").to_string()
+}
+
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let digest = Sha256::digest(bytes);
     digest.iter().map(|b| format!("{b:02x}")).collect()

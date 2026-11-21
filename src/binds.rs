@@ -145,6 +145,30 @@ pub fn run(dir: &Path, devices: Option<&str>, from_log: bool, binds: Option<&Pat
     }
 }
 
+/// `restore-preset`: back up StartPreset.4.start, then write `<preset>\r\n` x4.
+pub fn restore_preset(dir: &Path, preset: &str) -> Result<i32, String> {
+    if preset.is_empty() || preset.contains(['\r', '\n']) {
+        return Err(format!("invalid preset name {preset:?}"));
+    }
+    let path = dir.join(PRESET_NAME);
+    if path.exists() {
+        let bak = dir.join(format!("{PRESET_NAME}.bak-{}", crate::bundle::backup_stamp()));
+        if bak.exists() {
+            return Err(format!("{}: backup already exists", bak.display()));
+        }
+        fs::copy(&path, &bak).map_err(|e| format!("{}: {e}", bak.display()))?;
+        println!("backup: {}", bak.display());
+    } else if !dir.is_dir() {
+        return Err(format!("{}: not a directory", dir.display()));
+    } else {
+        println!("note: {} did not exist; nothing to back up", path.display());
+    }
+    let body = format!("{preset}\r\n").repeat(4);
+    fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
+    println!("wrote {} ({preset} x4, CRLF)", path.display());
+    Ok(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

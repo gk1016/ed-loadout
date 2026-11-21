@@ -236,3 +236,29 @@ fn c3_requires_devices_or_from_log() {
     let (_tmp, opts) = fixture_copy();
     bin().arg("check-binds").arg(opts.join("Bindings")).assert().code(2);
 }
+
+// ---- Criterion 4: restore-preset ------------------------------------------
+
+#[test]
+fn c4_restore_preset_writes_custom_crlf_x4_with_backup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let b = tmp.path().join("Bindings");
+    fs::create_dir_all(&b).unwrap();
+    let broken = fs::read(fixture().join("Bindings/StartPreset.4.start.broken")).unwrap();
+    fs::write(b.join("StartPreset.4.start"), &broken).unwrap();
+
+    bin().arg("restore-preset").arg(&b).assert().success();
+
+    assert_eq!(fs::read(b.join("StartPreset.4.start")).unwrap(), b"Custom\r\n".repeat(4));
+    let baks: Vec<PathBuf> = fs::read_dir(&b)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.file_name().unwrap().to_str().unwrap().starts_with("StartPreset.4.start.bak-"))
+        .collect();
+    assert_eq!(baks.len(), 1, "{baks:?}");
+    assert_eq!(fs::read(&baks[0]).unwrap(), broken);
+
+    // The restored file now passes the preset check.
+    let out = stdout_of(bin().arg("check-binds").arg(&b).args(["--devices", "", "--binds"]).arg(fixture().join("Bindings/Custom.4.2.binds")), 1);
+    assert!(!out.contains("warning:"), "{out}");
+}

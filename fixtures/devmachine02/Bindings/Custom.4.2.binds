@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<Root PresetName="Custom" MajorVersion="4" MinorVersion="2">
+	<KeyboardLayout>en-US</KeyboardLayout>
+	<MouseXMode Value="" />
+	<MouseXDecay Value="0" />
+	<MouseYMode Value="" />
+	<MouseYDecay Value="0" />
+	<MouseReset>
+		<Primary Device="{NoDevice}" Key="" />
+		<Secondary Device="{NoDevice}" Key="" />
+	</MouseReset>
+	<MouseSensitivity Value="1.00000000" />
+	<MouseDecayRate Value="4.00000000" />
+	<MouseDeadzone Value="0.05000000" />
+	<MouseLinearity Value="1.00000000" />
+	<MouseGUI Value="0" />
+	<BlockMouseDecay>
+		<Primary Device="{NoDevice}" Key="" />
+		<Secondary Device="{NoDevice}" Key="" />
+		<ToggleOn Value="0" />
+	</BlockMouseDecay>
+	<YawAxisRaw>
+		<Binding Device="231D0126" Key="Joy_ZAxis" />
+		<Inverted Value="1" />
+		<Deadzone Value="0.17687500" />
+	</YawAxisRaw>
+	<YawLeftButton>
+		<Primary Device="Keyboard" Key="Key_A" />
+		<Secondary Device="{NoDevice}" Key="" />
+	</YawLeftButton>
+	<YawRightButton>
+		<Primary Device="Keyboard" Key="Key_D" />
+		<Secondary Device="{NoDevice}" Key="" />
+	</YawRightButton>
+	<YawToRollMode Value="Bindings_YawIntoRollNone" />
+	<YawToRollSensitivity Value="0.40000001" />
+	<YawToRollMode_FAOff Value="" />
+	<YawToRollButton>
+		<Primary Device="{NoDevice}" Key="" />
+		<Secondary Device="{NoDevice}" Key="" />
+		<ToggleOn Value="0" />
+	</YawToRollButton>
+	<RollAxisRaw>
+		<Binding Device="231D0126" Key="Joy_XAxis" />
+		<Inverted Value="0" />
+		<Deadzone Value="0.16187499" />
+	</RollAxisRaw>
+	<RollLeftButton>
+		<Primary Device="{NoDevice}" Key="" />
+		<Secondary Device="{NoDevice}" Key="" />
+	</RollLeftButton>
+	<RollRightButton>
+		<Primary Device="{NoDevice}" Key="" />
+		<Secondary Device="{NoDevice}" Key="" />
+	</RollRightButton>
+	<PitchAxisRaw>
+		<Binding Device="231D0126" Key="Joy_YAxis" />
+		<Inverted Value="1" />
+		<Deadzone Value="0.06837500" />
+	</PitchAxisRaw>
+	<PitchUpButton>
+		<Primary Device="{NoDevice}" Key="" />
+		<Secondary Device="{NoDevice}" Key="" />
+	</PitchUpButton>
+	<PitchDownButton>
+		<Primary Device="{NoDevice}" Key="" />
+		<Secondary Device="{NoDevice}" Key="" />
+	</PitchDownButton>
+	<LateralThrustRaw>
+		<Binding Device="231D0127" Key="Joy_XAxis" />
+		<Inverted Value="0" />
+		<Deadzone Value="0.23862500" />
+	</LateralThrustRaw>
+	<LeftThrustButton>
+		<Primary Device="Keyboard" Key="Key_Q" />
+		<Secondary Device="{NoDevice}" Key="" />
+	</LeftThrustButton>
+	<RightThrustButton>
+		<Primary Device="Keyboard" Key="Key_E" />
+		<Secondary Device="{NoDevice}" Key="" />
+	</RightThrustButton>
+	<VerticalThrustRaw>
+		<Binding Device="231D0127" Key="Joy_RYAxis" />
+		<Inverted Value="1" />
+		<Deadzone Value="0.00000000" />
+	</VerticalThrustRaw>
+	<UpThrustButton>
+		<Primary Device="Keyboard" Key="Key_R" />
+		<Secondary Device="{NoDevice}" Key="" />
+	</UpThrustButton>
+	<DownThrustButton>
+		<Primary Device="Keyboard" Key="Key_F" />
+		<Secondary Device="{NoDevice}" Key="" />
+	</DownThrustButton>
+	<AheadThrust>
+		<Binding Device="{NoDevice}" Key="" />
+		<Inverted Value="0" />
+		<Deadzone Value="0.00000000" />
+	</AheadThrust>
+	<ForwardThrustButton>
+		<Primary Device="{NoDevice}" Key="" />
+		<Secondary Device="{NoDevice}" Key="" />
+	</ForwardThrustButton>
+	<BackwardThrustButton>
+		<Primary Device="{NoDevice}" Key="" />
+		<Secondary Device="{NoDevice}" Key="" />
+	</BackwardThrustButton>
+	<UseAlternateFlightValuesToggle>
+		<Primary Device="231D0127" Key="Joy_25" />
+		<Secondary Device="{NoDevice}" Key="" />
+		<ToggleOn Value="1" />
+	</UseAlternateFlightValuesToggle>
+	<YawAxisAlternate>
+		<Binding Device="231D0126" Key="Joy_ZAxis" />
+		<Inverted Value="1" />
+		<Deadzone Value="0.00000000" />
+	</YawAxisAlternate>
+	<RollAxisAlternate>
+		<Binding Device="231D0126" Key="Joy_XAxis" />
+		<Inverted Value="0" />
+		<Deadzone Value="0.00000000" />
+	</RollAxisAlternate>
+	<PitchAxisAlternate>
+		<Binding Device="231D0126" Key="Joy_YAxis" />
+		<Inverted Value="1" />
+		<Deadzone Value="0.00000000" />
+	</PitchAxisAlternate>
+	<LateralThrustAlternate>
+		<Binding Device="231D0127" Key="Joy_YAxis" />
+		<Inverted Value="1" />
+		<Deadzone Value="0.00000000" />
+	</LateralThrustAlternate>
+	<VerticalThrustAlternate>
+		<Binding Device="231D0127" Key="Joy_RYAxis" />
+		<Inverted Value="1" />
+		<Deadzone Value="0.00000000" />
+	</VerticalThrustAlternate>
+	<ThrottleAxis>
+		<Binding Device="231D0127" Key="Joy_YAxis" />
+		<Inverted Value="1" />
+		<Deadzone Value="0.00000000" />
+	</ThrottleAxis>
+	<ThrottleRange Value="" />
+	<ToggleReverseThrottleInput>
+		<Primary Device="{NoDevice}" Key="" />
+		<Secondary Device="{NoDevice}" Key="" />
+		<ToggleOn Value="1" />
+	</ToggleReverseThrottleInput>
+	<ForwardKey>
+		<Primary Device="Keyboard" Key="Key_W" />
+		<Secondary Device="{NoDevice}" Key="" />
+	</ForwardKey>
+	<BackwardKey>
+		<Primary Device="Keyboard" Key="Key_S" />
+		<Secondary Device="{NoDevice}" Key="" />
+	</BackwardKey>
+	<ThrottleIncrement Value="0.00000000" />
+	<SetSpeedZero>
+		<Primary Device="Keyboard" Key="Key_X" />
+		<Secondary Device="{NoDevice}" Key="" />
+	</SetSpeedZero>
+	<GalaxyMapOpen>
+		<Primary Device="045E0B22" Key="GamePad_Back" />
+		<Secondary Device="Keyboard" Key="Key_M" />
+	</GalaxyMapOpen>
+	<PlacementCamSpeedDec>
+		<Primary Device="045E0B22" Key="GamePad_LBumper">
+			<Modifier Device="045E0B22" Key="GamePad_FaceLeft" />
+		</Primary>
+		<Secondary Device="Keyboard" Key="Key_Minus" />
+	</PlacementCamSpeedDec>
+	<PlacementCamMouseSensitivity Value="5.00000000" />
+	<PlacementCamMouseXDecay Value="1" />
+	<PlacementCamMouseYDecay Value="1" />
+</Root>

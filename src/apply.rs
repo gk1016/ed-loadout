@@ -61,6 +61,9 @@ pub fn run_with(profile: &Path, options: &Path, machine: &str, running: bool) ->
         files.insert(rel, bytes);
     }
     for (rel, tag, value) in edits(&files, &overrides)? {
+        if tag == "SSAAMultiplier" {
+            refuse_newer_fxcfg(options, &rel)?;
+        }
         let bytes = files.get_mut(&rel).expect("edit targets a profile file");
         let text = std::str::from_utf8(bytes).map_err(|_| format!("{rel}: not UTF-8"))?;
         let new = replace_element(text, &tag, &value).map_err(|e| format!("{rel}: {e}"))?;
@@ -192,6 +195,31 @@ fn edits(files: &BTreeMap<String, Vec<u8>>, o: &Overrides) -> Result<Vec<(String
         }
     }
     Ok(out)
+}
+
+/// Error when the Options dir already holds a `Custom.<Major>.<Minor>.fxcfg`
+/// newer than the profile's ssaa target: Elite would read that one, and the
+/// override would land in a file the game ignores.
+fn refuse_newer_fxcfg(options: &Path, target: &str) -> Result<(), String> {
+    let Some(mine) = target.strip_prefix("Graphics/Custom.").and_then(fxcfg_version) else {
+        return Ok(());
+    };
+    let Ok(entries) = fs::read_dir(options.join("Graphics")) else {
+        return Ok(());
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if let Some(v) = name.strip_prefix("Custom.").and_then(fxcfg_version)
+            && v > mine
+            && entry.file_type().is_ok_and(|t| t.is_file())
+        {
+            return Err(format!(
+                "ssaa: {} has Graphics/{name}, newer than the profile's {target}; Elite reads the newer one. Capture from a machine on the same game version",
+                options.display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// `4.4.fxcfg` (the part after `Custom.`) -> `(4, 4)`; anything else -> None.

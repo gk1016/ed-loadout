@@ -460,6 +460,31 @@ fn v01_c2_apply_ssaa_with_no_parsable_fxcfg_is_an_error() {
 }
 
 #[test]
+fn v01_c2_apply_ssaa_refuses_when_target_has_a_newer_fxcfg() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "\n[machine.laptop]\nssaa = 1.25\n");
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+    let fx44 = fs::read(fixture().join("Graphics/Custom.4.4.fxcfg")).unwrap();
+    fs::write(target.join("Graphics/Custom.4.5.fxcfg"), &fx44).unwrap();
+    let err = bin()
+        .arg("apply")
+        .arg(&profile)
+        .arg("--options")
+        .arg(&target)
+        .args(["--machine", "laptop"])
+        .assert()
+        .code(3)
+        .get_output()
+        .stderr
+        .clone();
+    let err = String::from_utf8(err).unwrap();
+    assert!(err.contains("Graphics/Custom.4.5.fxcfg, newer than the profile's Graphics/Custom.4.4.fxcfg"), "{err}");
+    assert!(!target.join("_loadout-backup").exists());
+    assert_eq!(fs::read(target.join("Graphics/Custom.4.4.fxcfg")).unwrap(), fx44);
+}
+
+#[test]
 fn v01_c4_version_is_0_1_1() {
     bin().arg("--version").assert().success().stdout("ed-loadout 0.1.1\n");
 }

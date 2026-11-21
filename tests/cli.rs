@@ -111,6 +111,23 @@ fn c1_capture_refuses_to_overwrite_a_profile() {
         .code(3);
 }
 
+#[test]
+fn c1_capture_refuses_a_leftover_files_dir() {
+    let (tmp, opts) = fixture_copy();
+    let profile = tmp.path().join("profile");
+    fs::create_dir_all(profile.join("files/Graphics")).unwrap();
+    fs::write(profile.join("files/Graphics/Stale.xml"), "x").unwrap();
+    bin()
+        .args(["capture", "--options"])
+        .arg(&opts)
+        .arg("--out")
+        .arg(&profile)
+        .args(["--machine", "a"])
+        .assert()
+        .code(3);
+    assert!(!profile.join("profile.toml").exists());
+}
+
 // ---- Criterion 2: diff ----------------------------------------------------
 
 fn two_profiles() -> (tempfile::TempDir, PathBuf, PathBuf) {

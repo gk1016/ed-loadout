@@ -12,7 +12,7 @@ pub fn run(options: &Path, out: &Path, machine: &str) -> Result<i32, String> {
             options.display()
         ));
     }
-    if out.join("profile.toml").exists() {
+    if out.join("profile.toml").exists() || out.join("files").exists() {
         return Err(format!(
             "{}: already holds a profile; refusing to overwrite",
             out.display()

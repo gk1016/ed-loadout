@@ -4,3 +4,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+clap = { version = "4", features = ["derive"] }
+roxmltree = "0.20"
+sha2 = "0.10"
+similar = "2"
+toml = "0.8"
+walkdir = "2"
+
+[dev-dependencies]
+assert_cmd = "2"
+tempfile = "3"

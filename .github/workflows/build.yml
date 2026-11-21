@@ -4,6 +4,8 @@
 #   BTS_RUNNER_WSL       runner labels, JSON list (default below)
 #   BTS_CARGO_MANIFEST   Cargo.toml path, repo-relative (default Cargo.toml)
 # From gk1016/bts-template stacks/rust-only (frago plan 2026-11-14-pipeline-v2 C4).
+# ed-loadout addition (Cowork 2026-11-21): cargo check for the Windows target so
+# cfg(windows) paths compile on every PR; the runner has mingw-w64 + the target.
 name: build
 
 on:
@@ -33,6 +35,7 @@ jobs:
           export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
           cargo --version
           cargo test --manifest-path "$MANIFEST" 2>&1 | tee cargo-test.log
+          cargo check --manifest-path "$MANIFEST" --target x86_64-pc-windows-gnu 2>&1 | tee -a cargo-test.log
 
       - name: cargo-test.log
         if: always()

@@ -147,20 +147,29 @@ fn machine_overrides(table: &toml::Table, machine: &str) -> Result<Overrides, St
 fn edits(files: &BTreeMap<String, Vec<u8>>, o: &Overrides) -> Result<Vec<(String, String, String)>, String> {
     let mut out = Vec::new();
     if let Some(ssaa) = o.ssaa {
-        let fx: Vec<&String> = files
-            .keys()
-            .filter(|r| r.starts_with("Graphics/Custom.") && r.ends_with(".fxcfg"))
-            .collect();
-        match fx.as_slice() {
-            [one] => out.push(((*one).clone(), "SSAAMultiplier".into(), format!("{ssaa:.6}"))),
-            [] => return Err("ssaa: profile has no Graphics/Custom.*.fxcfg".into()),
-            many => {
-                return Err(format!(
-                    "ssaa: profile has {} Graphics/Custom.*.fxcfg files; expected exactly one",
-                    many.len()
-                ));
+        // Elite reads the highest Custom.<Major>.<Minor>.fxcfg; old versions
+        // left behind by updates are not touched.
+        let mut best: Option<((u32, u32), &String)> = None;
+        for rel in files.keys() {
+            let Some(name) = rel.strip_prefix("Graphics/Custom.") else {
+                continue;
+            };
+            if !name.contains("fxcfg") {
+                continue;
+            }
+            let Some(version) = fxcfg_version(name) else {
+                eprintln!("notice: ignoring {rel}: not Custom.<Major>.<Minor>.fxcfg");
+                continue;
+            };
+            if best.is_none_or(|(v, _)| version > v) {
+                best = Some((version, rel));
             }
         }
+        let Some((_, rel)) = best else {
+            return Err("ssaa: profile has no Graphics/Custom.<Major>.<Minor>.fxcfg".into());
+        };
+        println!("ssaa target: {rel}");
+        out.push((rel.clone(), "SSAAMultiplier".into(), format!("{ssaa:.6}")));
     }
     let mut display = |tag: &str, value: String| out.push((DISPLAY.to_owned(), tag.to_owned(), value));
     if let Some(w) = o.screen_width {
@@ -183,6 +192,16 @@ fn edits(files: &BTreeMap<String, Vec<u8>>, o: &Overrides) -> Result<Vec<(String
         }
     }
     Ok(out)
+}
+
+/// `4.4.fxcfg` (the part after `Custom.`) -> `(4, 4)`; anything else -> None.
+fn fxcfg_version(name: &str) -> Option<(u32, u32)> {
+    let (major, minor) = name.strip_suffix(".fxcfg")?.split_once('.')?;
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if !digits(major) || !digits(minor) {
+        return None;
+    }
+    Some((major.parse().ok()?, minor.parse().ok()?))
 }
 
 /// Replace the text of the single `<tag>...</tag>` in `text`, leaving every
@@ -246,6 +265,16 @@ mod tests {
         assert!(replace_element("<A>1</A><A>2</A>", "A", "3").is_err());
         let commented = "<R>\n\t<!-- <A>1</A> -->\n\t<B>x</B>\n</R>\n";
         assert!(replace_element(commented, "A", "2").unwrap_err().contains("never inserts"));
+    }
+
+    #[test]
+    fn fxcfg_version_parses_major_minor_only() {
+        assert_eq!(fxcfg_version("4.4.fxcfg"), Some((4, 4)));
+        assert_eq!(fxcfg_version("4.10.fxcfg"), Some((4, 10)));
+        assert!(fxcfg_version("4.10.fxcfg") > fxcfg_version("4.9.fxcfg"));
+        for no in ["fxcfg.bak", "fxcfg", "4.fxcfg", "4.4.4.fxcfg", "a.4.fxcfg", "4.4.fxcfg.bak", "+4.4.fxcfg"] {
+            assert_eq!(fxcfg_version(no), None, "{no}");
+        }
     }
 
     #[test]

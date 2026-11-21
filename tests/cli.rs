@@ -402,3 +402,59 @@ fn c5_apply_absent_element_is_an_error_and_writes_nothing() {
         fs::read(fixture().join("Graphics/DisplaySettings.xml")).unwrap()
     );
 }
+
+// ---- v0.1 (claude/plans/2026-11-21-loadout-v0.1.md) -----------------------
+
+#[test]
+fn v01_c2_apply_ssaa_targets_highest_version_fxcfg() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "\n[machine.laptop]\nssaa = 1.25\n");
+    let fx44 = fs::read(fixture().join("Graphics/Custom.4.4.fxcfg")).unwrap();
+    let pg = profile.join("files/Graphics");
+    fs::write(pg.join("Custom.4.2.fxcfg"), &fx44).unwrap();
+    fs::write(pg.join("Custom.fxcfg.bak"), &fx44).unwrap();
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+
+    let out = bin()
+        .arg("apply")
+        .arg(&profile)
+        .arg("--options")
+        .arg(&target)
+        .args(["--machine", "laptop"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stdout.contains("ssaa target: Graphics/Custom.4.4.fxcfg\n"), "{stdout}");
+    assert!(stderr.contains("notice: ignoring Graphics/Custom.fxcfg.bak"), "{stderr}");
+    assert!(!stderr.contains("Custom.4.2"), "{stderr}");
+
+    assert_eq!(
+        changed_lines(&fx44, &fs::read(target.join("Graphics/Custom.4.4.fxcfg")).unwrap()),
+        vec![(31, "\t<SSAAMultiplier>1.500000</SSAAMultiplier>".into(), "\t<SSAAMultiplier>1.250000</SSAAMultiplier>".into())]
+    );
+    assert_eq!(fs::read(target.join("Graphics/Custom.4.2.fxcfg")).unwrap(), fx44);
+    assert_eq!(fs::read(target.join("Graphics/Custom.fxcfg.bak")).unwrap(), fx44);
+}
+
+#[test]
+fn v01_c2_apply_ssaa_with_no_parsable_fxcfg_is_an_error() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "\n[machine.laptop]\nssaa = 1.25\n");
+    let pg = profile.join("files/Graphics");
+    fs::rename(pg.join("Custom.4.4.fxcfg"), pg.join("Custom.fxcfg.bak")).unwrap();
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+    bin()
+        .arg("apply")
+        .arg(&profile)
+        .arg("--options")
+        .arg(&target)
+        .args(["--machine", "laptop"])
+        .assert()
+        .code(3);
+    assert!(!target.join("_loadout-backup").exists());
+}

@@ -402,3 +402,202 @@ fn c5_apply_absent_element_is_an_error_and_writes_nothing() {
         fs::read(fixture().join("Graphics/DisplaySettings.xml")).unwrap()
     );
 }
+
+// ---- v0.1 (claude/plans/2026-11-21-loadout-v0.1.md) -----------------------
+
+#[test]
+fn v01_c2_apply_ssaa_targets_highest_version_fxcfg() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "\n[machine.laptop]\nssaa = 1.25\n");
+    let fx44 = fs::read(fixture().join("Graphics/Custom.4.4.fxcfg")).unwrap();
+    let pg = profile.join("files/Graphics");
+    fs::write(pg.join("Custom.4.2.fxcfg"), &fx44).unwrap();
+    fs::write(pg.join("Custom.fxcfg.bak"), &fx44).unwrap();
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+
+    let out = bin()
+        .arg("apply")
+        .arg(&profile)
+        .arg("--options")
+        .arg(&target)
+        .args(["--machine", "laptop"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stdout.contains("ssaa target: Graphics/Custom.4.4.fxcfg\n"), "{stdout}");
+    assert!(stderr.contains("notice: ignoring Graphics/Custom.fxcfg.bak"), "{stderr}");
+    assert!(!stderr.contains("Custom.4.2"), "{stderr}");
+
+    assert_eq!(
+        changed_lines(&fx44, &fs::read(target.join("Graphics/Custom.4.4.fxcfg")).unwrap()),
+        vec![(31, "\t<SSAAMultiplier>1.500000</SSAAMultiplier>".into(), "\t<SSAAMultiplier>1.250000</SSAAMultiplier>".into())]
+    );
+    assert_eq!(fs::read(target.join("Graphics/Custom.4.2.fxcfg")).unwrap(), fx44);
+    assert_eq!(fs::read(target.join("Graphics/Custom.fxcfg.bak")).unwrap(), fx44);
+}
+
+#[test]
+fn v01_c2_apply_ssaa_with_no_parsable_fxcfg_is_an_error() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "\n[machine.laptop]\nssaa = 1.25\n");
+    let pg = profile.join("files/Graphics");
+    fs::rename(pg.join("Custom.4.4.fxcfg"), pg.join("Custom.fxcfg.bak")).unwrap();
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+    bin()
+        .arg("apply")
+        .arg(&profile)
+        .arg("--options")
+        .arg(&target)
+        .args(["--machine", "laptop"])
+        .assert()
+        .code(3);
+    assert!(!target.join("_loadout-backup").exists());
+}
+
+#[test]
+fn v01_c2_apply_ssaa_refuses_when_target_has_a_newer_fxcfg() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "\n[machine.laptop]\nssaa = 1.25\n");
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+    let fx44 = fs::read(fixture().join("Graphics/Custom.4.4.fxcfg")).unwrap();
+    fs::write(target.join("Graphics/Custom.4.5.fxcfg"), &fx44).unwrap();
+    let err = bin()
+        .arg("apply")
+        .arg(&profile)
+        .arg("--options")
+        .arg(&target)
+        .args(["--machine", "laptop"])
+        .assert()
+        .code(3)
+        .get_output()
+        .stderr
+        .clone();
+    let err = String::from_utf8(err).unwrap();
+    assert!(err.contains("Graphics/Custom.4.5.fxcfg, newer than the profile's Graphics/Custom.4.4.fxcfg"), "{err}");
+    assert!(!target.join("_loadout-backup").exists());
+    assert_eq!(fs::read(target.join("Graphics/Custom.4.4.fxcfg")).unwrap(), fx44);
+}
+
+#[test]
+fn v01_c4_version_is_0_1_1() {
+    bin().arg("--version").assert().success().stdout("ed-loadout 0.1.1\n");
+}
+
+/// `<base>/Frontier Developments/Elite Dangerous/Options`, with the
+/// platform's separators so it compares equal to what the binary prints.
+fn default_options(base: &Path) -> PathBuf {
+    base.join("Frontier Developments").join("Elite Dangerous").join("Options")
+}
+
+/// A LOCALAPPDATA root holding a fixture copy at the default Options path.
+fn local_appdata() -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let opts = default_options(&tmp.path().join("LocalAppData"));
+    copy_tree(&fixture(), &opts);
+    (tmp, opts)
+}
+
+#[test]
+fn v01_c3_capture_defaults_to_localappdata_options() {
+    let (tmp, opts) = local_appdata();
+    let explicit = tmp.path().join("explicit");
+    capture(&opts, &explicit, "devmachine02");
+    let defaulted = tmp.path().join("defaulted");
+    let out = bin()
+        .env("LOCALAPPDATA", tmp.path().join("LocalAppData"))
+        .args(["capture", "--out"])
+        .arg(&defaulted)
+        .args(["--machine", "devmachine02"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let out = String::from_utf8(out).unwrap();
+    assert!(out.starts_with(&format!("options dir: {}\n", opts.display())), "{out}");
+
+    // Same result as v0 criterion 1: same file set, same bytes, same sha256.
+    let files = |p: &Path| {
+        let t: toml::Table = fs::read_to_string(p.join("profile.toml")).unwrap().parse().unwrap();
+        t["files"].as_table().unwrap().clone()
+    };
+    assert_eq!(files(&defaulted), files(&explicit));
+    assert_eq!(files(&defaulted).len(), 7);
+    for rel in files(&defaulted).keys() {
+        assert_eq!(
+            fs::read(defaulted.join("files").join(rel)).unwrap(),
+            fs::read(fixture().join(rel)).unwrap(),
+            "{rel}"
+        );
+    }
+}
+
+#[test]
+fn v01_c3_unset_localappdata_exits_3_naming_the_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let err = bin()
+        .env_remove("LOCALAPPDATA")
+        .args(["capture", "--out"])
+        .arg(tmp.path().join("p"))
+        .args(["--machine", "a"])
+        .assert()
+        .code(3)
+        .get_output()
+        .stderr
+        .clone();
+    let err = String::from_utf8(err).unwrap();
+    assert_eq!(err.lines().count(), 1, "{err}");
+    assert!(err.contains("LOCALAPPDATA is not set"), "{err}");
+    let tried = default_options(Path::new("$LOCALAPPDATA"));
+    assert!(err.contains(&format!("tried {};", tried.display())), "{err}");
+    assert!(!tmp.path().join("p").exists());
+}
+
+#[test]
+fn v01_c3_missing_default_dir_exits_3_naming_the_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let err = bin()
+        .env("LOCALAPPDATA", tmp.path())
+        .args(["check-binds", "--devices", ""])
+        .assert()
+        .code(3)
+        .get_output()
+        .stderr
+        .clone();
+    let err = String::from_utf8(err).unwrap();
+    let tried = default_options(tmp.path()).join("Bindings");
+    assert_eq!(err, format!("error: {}: Bindings dir not found; pass the Bindings dir\n", tried.display()));
+}
+
+#[test]
+fn v01_c3_binds_commands_and_apply_default_too() {
+    let (tmp, opts) = local_appdata();
+    let lad = tmp.path().join("LocalAppData");
+    let bindings = opts.join("Bindings");
+    let out = stdout_of(
+        bin().env("LOCALAPPDATA", &lad).args(["check-binds", "--devices", "231D0126,231D0127,231D2204,045e0b22"]),
+        0,
+    );
+    assert!(out.starts_with(&format!("bindings dir: {}\n", bindings.display())), "{out}");
+
+    fs::copy(fixture().join("Bindings/StartPreset.4.start.broken"), bindings.join("StartPreset.4.start")).unwrap();
+    bin().env("LOCALAPPDATA", &lad).arg("restore-preset").assert().success();
+    assert_eq!(fs::read(bindings.join("StartPreset.4.start")).unwrap(), b"Custom\r\nCustom\r\nCustom\r\nCustom\r\n");
+
+    let profile = laptop_profile(tmp.path(), &fixture(), "\n[machine.laptop]\nmax_fps = 120\n");
+    bin()
+        .env("LOCALAPPDATA", &lad)
+        .arg("apply")
+        .arg(&profile)
+        .args(["--machine", "laptop"])
+        .assert()
+        .success();
+    assert!(opts.join("_loadout-backup").is_dir());
+    assert!(fs::read_to_string(opts.join("Graphics/DisplaySettings.xml")).unwrap().contains("<MaxFramesPerSecond>120<"));
+}

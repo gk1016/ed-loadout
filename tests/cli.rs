@@ -262,3 +262,121 @@ fn c4_restore_preset_writes_custom_crlf_x4_with_backup() {
     let out = stdout_of(bin().arg("check-binds").arg(&b).args(["--devices", "", "--binds"]).arg(fixture().join("Bindings/Custom.4.2.binds")), 1);
     assert!(!out.contains("warning:"), "{out}");
 }
+
+// ---- Criterion 5: apply ---------------------------------------------------
+
+/// Lines of `a` and `b` that differ, as (line number, a, b). Same line count required.
+fn changed_lines(a: &[u8], b: &[u8]) -> Vec<(usize, String, String)> {
+    let a = String::from_utf8(a.to_vec()).unwrap();
+    let b = String::from_utf8(b.to_vec()).unwrap();
+    let (la, lb): (Vec<&str>, Vec<&str>) = (a.split('\n').collect(), b.split('\n').collect());
+    assert_eq!(la.len(), lb.len(), "line count changed");
+    la.iter()
+        .zip(&lb)
+        .enumerate()
+        .filter(|(_, (x, y))| x != y)
+        .map(|(i, (x, y))| (i + 1, x.to_string(), y.to_string()))
+        .collect()
+}
+
+fn laptop_profile(tmp: &Path, opts: &Path, section: &str) -> PathBuf {
+    let profile = tmp.join("profile");
+    capture(opts, &profile, "devmachine02");
+    let mut t = fs::read_to_string(profile.join("profile.toml")).unwrap();
+    t.push_str(section);
+    fs::write(profile.join("profile.toml"), t).unwrap();
+    profile
+}
+
+#[test]
+fn c5_apply_overrides_change_only_the_target_lines_and_back_up() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "\n[machine.laptop]\nssaa = 1.25\nmax_fps = 120\n");
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+
+    bin()
+        .arg("apply")
+        .arg(&profile)
+        .arg("--options")
+        .arg(&target)
+        .args(["--machine", "laptop"])
+        .assert()
+        .success();
+
+    let fx = "Graphics/Custom.4.4.fxcfg";
+    let ds = "Graphics/DisplaySettings.xml";
+    let fixture_fx = fs::read(fixture().join(fx)).unwrap();
+    let fixture_ds = fs::read(fixture().join(ds)).unwrap();
+    assert_eq!(
+        changed_lines(&fixture_fx, &fs::read(target.join(fx)).unwrap()),
+        vec![(31, "\t<SSAAMultiplier>1.500000</SSAAMultiplier>".into(), "\t<SSAAMultiplier>1.250000</SSAAMultiplier>".into())]
+    );
+    assert_eq!(
+        changed_lines(&fixture_ds, &fs::read(target.join(ds)).unwrap()),
+        vec![(13, "\t<MaxFramesPerSecond>144</MaxFramesPerSecond>".into(), "\t<MaxFramesPerSecond>120</MaxFramesPerSecond>".into())]
+    );
+    // Every other bundle file is byte-identical to the fixture.
+    for rel in [
+        "Graphics/Settings.xml",
+        "Graphics/StartPreset.start",
+        "Graphics/GraphicsConfigurationOverride.xml",
+        "Bindings/Custom.4.2.binds",
+        "Bindings/StartPreset.4.start",
+    ] {
+        assert_eq!(fs::read(target.join(rel)).unwrap(), fs::read(fixture().join(rel)).unwrap(), "{rel}");
+    }
+    // The profile itself is not modified by apply.
+    assert_eq!(fs::read(profile.join("files").join(fx)).unwrap(), fixture_fx);
+
+    let stamps: Vec<PathBuf> = fs::read_dir(target.join("_loadout-backup")).unwrap().map(|e| e.unwrap().path()).collect();
+    assert_eq!(stamps.len(), 1, "{stamps:?}");
+    assert_eq!(fs::read(stamps[0].join(fx)).unwrap(), fixture_fx);
+    assert_eq!(fs::read(stamps[0].join(ds)).unwrap(), fixture_ds);
+}
+
+#[test]
+fn c5_apply_crlf_target_keeps_crlf() {
+    let (tmp, src) = fixture_copy();
+    let ds = src.join("Graphics/DisplaySettings.xml");
+    let crlf = fs::read_to_string(&ds).unwrap().replace('\n', "\r\n");
+    fs::write(&ds, &crlf).unwrap();
+    let profile = laptop_profile(tmp.path(), &src, "\n[machine.laptop]\nrefresh_hz = 60\nscreen_width = 2560\n");
+    let target = tmp.path().join("Target");
+    fs::create_dir_all(&target).unwrap();
+    bin().arg("apply").arg(&profile).arg("--options").arg(&target).args(["--machine", "laptop"]).assert().success();
+    let expected = crlf
+        .replace("<ScreenWidth>5120<", "<ScreenWidth>2560<")
+        .replace("<DX11_RefreshRateNumerator>120<", "<DX11_RefreshRateNumerator>60<");
+    assert_eq!(fs::read_to_string(target.join("Graphics/DisplaySettings.xml")).unwrap(), expected);
+    // Nothing pre-existed, so nothing was backed up.
+    assert!(!target.join("_loadout-backup").exists());
+}
+
+#[test]
+fn c5_apply_absent_element_is_an_error_and_writes_nothing() {
+    let (tmp, src) = fixture_copy();
+    let ds = src.join("Graphics/DisplaySettings.xml");
+    let text = fs::read_to_string(&ds).unwrap().replace("\t<MaxFramesPerSecond>144</MaxFramesPerSecond>\n", "");
+    fs::write(&ds, text).unwrap();
+    let profile = laptop_profile(tmp.path(), &src, "\n[machine.laptop]\nmax_fps = 120\n");
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+    let err = bin()
+        .arg("apply")
+        .arg(&profile)
+        .arg("--options")
+        .arg(&target)
+        .args(["--machine", "laptop"])
+        .assert()
+        .code(3)
+        .get_output()
+        .stderr
+        .clone();
+    assert!(String::from_utf8(err).unwrap().contains("never inserts"));
+    assert!(!target.join("_loadout-backup").exists());
+    assert_eq!(
+        fs::read(target.join("Graphics/DisplaySettings.xml")).unwrap(),
+        fs::read(fixture().join("Graphics/DisplaySettings.xml")).unwrap()
+    );
+}

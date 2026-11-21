@@ -7,7 +7,6 @@ edition = "2024"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4", features = ["derive"] }
 roxmltree = "0.20"
-serde = { version = "1", features = ["derive"] }
 sha2 = "0.10"
 similar = "2"
 toml = "0.8"

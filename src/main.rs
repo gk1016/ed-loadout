@@ -3,6 +3,7 @@
 //! Exit codes: 0 ok / identical, 1 differences or problems found,
 //! 2 refused (game running) or usage error, 3 error.
 
+mod apply;
 mod binds;
 mod bundle;
 mod capture;
@@ -63,6 +64,17 @@ enum Cmd {
         #[arg(long, default_value = "Custom")]
         preset: String,
     },
+    /// Back up, write a profile into an Options dir, then apply the
+    /// [machine.<name>] overrides from profile.toml. Exit 2 if the game is running.
+    Apply {
+        profile: PathBuf,
+        /// Elite Dangerous Options dir to write into.
+        #[arg(long)]
+        options: PathBuf,
+        /// Machine whose [machine.<name>] overrides apply.
+        #[arg(long)]
+        machine: String,
+    },
 }
 
 fn main() -> ExitCode {
@@ -74,6 +86,7 @@ fn main() -> ExitCode {
             binds::run(&bindings_dir, devices.as_deref(), from_log, binds.as_deref())
         }
         Cmd::RestorePreset { bindings_dir, preset } => binds::restore_preset(&bindings_dir, &preset),
+        Cmd::Apply { profile, options, machine } => apply::run(&profile, &options, &machine),
     };
     match result {
         Ok(code) => ExitCode::from(code as u8),

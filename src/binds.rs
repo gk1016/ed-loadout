@@ -32,7 +32,9 @@ pub fn resolve_binds(dir: &Path, explicit: Option<&Path>) -> Result<(PathBuf, &'
     let entries = fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !(name.starts_with("Custom.4.") && name.ends_with(".binds")) {
+        if !(name.starts_with("Custom.4.") && name.ends_with(".binds"))
+            || !entry.file_type().is_ok_and(|t| t.is_file())
+        {
             continue;
         }
         let Ok(mtime) = entry.metadata().and_then(|m| m.modified()) else {

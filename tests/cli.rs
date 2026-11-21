@@ -239,6 +239,11 @@ fn c3_resolution_falls_back_to_newest_custom_binds() {
     fs::write(b.join("Custom.4.9.binds"), "<Root><Primary Device=\"ABCD0001\" Key=\"x\" /></Root>").unwrap();
     let out = stdout_of(bin().arg("check-binds").arg(&b).args(["--devices", ""]), 1);
     assert!(out.contains("Custom.4.9.binds (from newest Custom.4.*.binds)"), "{out}");
+    // A newer directory with a binds-like name is not a candidate.
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    fs::create_dir(b.join("Custom.4.99.binds")).unwrap();
+    let out = stdout_of(bin().arg("check-binds").arg(&b).args(["--devices", ""]), 1);
+    assert!(out.contains("Custom.4.9.binds (from newest Custom.4.*.binds)"), "{out}");
     assert!(out.contains("missing device: ABCD0001 (1 binding)"), "{out}");
     // --binds wins over everything.
     let out = stdout_of(

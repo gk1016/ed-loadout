@@ -5,6 +5,7 @@
 
 mod bundle;
 mod capture;
+mod diff;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -31,12 +32,18 @@ enum Cmd {
         #[arg(long)]
         machine: String,
     },
+    /// Compare two profiles. Exit 0 when identical, 1 when different.
+    Diff {
+        profile_a: PathBuf,
+        profile_b: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.cmd {
         Cmd::Capture { options, out, machine } => capture::run(&options, &out, &machine),
+        Cmd::Diff { profile_a, profile_b } => diff::run(&profile_a, &profile_b),
     };
     match result {
         Ok(code) => ExitCode::from(code as u8),

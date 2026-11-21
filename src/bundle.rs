@@ -56,6 +56,32 @@ pub fn scan_options(options: &Path) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
+/// Every file under `<profile>/files`, as sorted relative paths.
+pub fn scan_profile(profile: &Path) -> Result<Vec<String>, String> {
+    let root = profile.join("files");
+    if !root.is_dir() {
+        return Err(format!("{}: not a profile (no files/ dir)", profile.display()));
+    }
+    let mut out = Vec::new();
+    for entry in walkdir::WalkDir::new(&root) {
+        let entry = entry.map_err(|e| format!("{}: {e}", root.display()))?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let rel = entry
+            .path()
+            .strip_prefix(&root)
+            .map_err(|e| e.to_string())?
+            .components()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("/");
+        out.push(rel);
+    }
+    out.sort();
+    Ok(out)
+}
+
 /// Join a `/`-separated relative path onto `base`.
 pub fn join_rel(base: &Path, rel: &str) -> PathBuf {
     let mut p = base.to_path_buf();

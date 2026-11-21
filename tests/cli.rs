@@ -110,3 +110,55 @@ fn c1_capture_refuses_to_overwrite_a_profile() {
         .assert()
         .code(3);
 }
+
+// ---- Criterion 2: diff ----------------------------------------------------
+
+fn two_profiles() -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let (tmp, opts) = fixture_copy();
+    let a = tmp.path().join("a");
+    let b = tmp.path().join("b");
+    capture(&opts, &a, "devmachine02");
+    capture(&opts, &b, "devmachine02");
+    (tmp, a, b)
+}
+
+#[test]
+fn c2_diff_identical_exits_0() {
+    let (_tmp, a, b) = two_profiles();
+    bin().arg("diff").arg(&a).arg(&b).assert().code(0).stdout("");
+}
+
+#[test]
+fn c2_diff_ssaa_change_prints_one_element_line() {
+    let (_tmp, a, b) = two_profiles();
+    let fx = b.join("files/Graphics/Custom.4.4.fxcfg");
+    let text = fs::read_to_string(&fx).unwrap();
+    let old = "<SSAAMultiplier>1.500000</SSAAMultiplier>";
+    assert!(text.contains(old));
+    fs::write(&fx, text.replace(old, "<SSAAMultiplier>1.250000</SSAAMultiplier>")).unwrap();
+    bin()
+        .arg("diff")
+        .arg(&a)
+        .arg(&b)
+        .assert()
+        .code(1)
+        .stdout("Graphics/Custom.4.4.fxcfg: SSAAMultiplier 1.500000 -> 1.250000\n");
+}
+
+#[test]
+fn c2_diff_line_diff_and_one_side_only() {
+    let (_tmp, a, b) = two_profiles();
+    fs::copy(
+        fixture().join("Bindings/StartPreset.4.start.broken"),
+        b.join("files/Bindings/StartPreset.4.start"),
+    )
+    .unwrap();
+    fs::remove_file(a.join("files/Graphics/GraphicsConfigurationOverride.xml")).unwrap();
+    let out = bin().arg("diff").arg(&a).arg(&b).assert().code(1).get_output().stdout.clone();
+    let out = String::from_utf8(out).unwrap();
+    assert!(out.contains("only in b: Graphics/GraphicsConfigurationOverride.xml"), "{out}");
+    assert!(out.contains("--- a/Bindings/StartPreset.4.start"), "{out}");
+    assert!(out.contains("+++ b/Bindings/StartPreset.4.start"), "{out}");
+    assert!(out.contains("-Custom\n"), "{out}");
+    assert!(out.contains("+GenericJoystick\n"), "{out}");
+}

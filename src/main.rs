@@ -25,8 +25,9 @@ enum Cmd {
     /// Copy the settings bundle from an Options dir into a new profile.
     Capture {
         /// Elite Dangerous Options dir (holds Graphics/ and Bindings/).
+        /// Default: %LOCALAPPDATA%/Frontier Developments/Elite Dangerous/Options.
         #[arg(long)]
-        options: PathBuf,
+        options: Option<PathBuf>,
         /// Profile dir to create.
         #[arg(long)]
         out: PathBuf,
@@ -44,7 +45,8 @@ enum Cmd {
     #[command(group = clap::ArgGroup::new("source").required(true).args(["devices", "from_log"]))]
     CheckBinds {
         /// Bindings dir (holds the .binds files and StartPreset.4.start).
-        bindings_dir: PathBuf,
+        /// Default: the Bindings dir under the default Options dir.
+        bindings_dir: Option<PathBuf>,
         /// Comma-separated GUIDs of the devices connected now.
         #[arg(long)]
         devices: Option<String>,
@@ -59,7 +61,8 @@ enum Cmd {
     /// after backing up the old file.
     RestorePreset {
         /// Bindings dir (holds StartPreset.4.start).
-        bindings_dir: PathBuf,
+        /// Default: the Bindings dir under the default Options dir.
+        bindings_dir: Option<PathBuf>,
         /// Preset name to write on every line.
         #[arg(long, default_value = "Custom")]
         preset: String,
@@ -69,24 +72,52 @@ enum Cmd {
     Apply {
         profile: PathBuf,
         /// Elite Dangerous Options dir to write into.
+        /// Default: %LOCALAPPDATA%/Frontier Developments/Elite Dangerous/Options.
         #[arg(long)]
-        options: PathBuf,
+        options: Option<PathBuf>,
         /// Machine whose [machine.<name>] overrides apply.
         #[arg(long)]
         machine: String,
     },
 }
 
+/// The dir given on the command line, else `$LOCALAPPDATA/Frontier
+/// Developments/Elite Dangerous/Options` (plus `sub`), which must exist.
+/// The defaulted path is printed.
+fn default_dir(given: Option<PathBuf>, sub: Option<&str>) -> Result<PathBuf, String> {
+    if let Some(p) = given {
+        return Ok(p);
+    }
+    let base = std::env::var_os("LOCALAPPDATA").filter(|v| !v.is_empty());
+    let mut p = PathBuf::from(base.clone().unwrap_or_else(|| "$LOCALAPPDATA".into()));
+    p.extend(["Frontier Developments", "Elite Dangerous", "Options"]);
+    p.extend(sub);
+    let what = if sub.is_some() { "Bindings" } else { "Options" };
+    if base.is_none() {
+        return Err(format!("LOCALAPPDATA is not set; tried {}; pass the {what} dir", p.display()));
+    }
+    if !p.is_dir() {
+        return Err(format!("{}: {what} dir not found; pass the {what} dir", p.display()));
+    }
+    println!("{} dir: {}", what.to_ascii_lowercase(), p.display());
+    Ok(p)
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.cmd {
-        Cmd::Capture { options, out, machine } => capture::run(&options, &out, &machine),
-        Cmd::Diff { profile_a, profile_b } => diff::run(&profile_a, &profile_b),
-        Cmd::CheckBinds { bindings_dir, devices, from_log, binds } => {
-            binds::run(&bindings_dir, devices.as_deref(), from_log, binds.as_deref())
+        Cmd::Capture { options, out, machine } => {
+            default_dir(options, None).and_then(|o| capture::run(&o, &out, &machine))
         }
-        Cmd::RestorePreset { bindings_dir, preset } => binds::restore_preset(&bindings_dir, &preset),
-        Cmd::Apply { profile, options, machine } => apply::run(&profile, &options, &machine),
+        Cmd::Diff { profile_a, profile_b } => diff::run(&profile_a, &profile_b),
+        Cmd::CheckBinds { bindings_dir, devices, from_log, binds } => default_dir(bindings_dir, Some("Bindings"))
+            .and_then(|d| binds::run(&d, devices.as_deref(), from_log, binds.as_deref())),
+        Cmd::RestorePreset { bindings_dir, preset } => {
+            default_dir(bindings_dir, Some("Bindings")).and_then(|d| binds::restore_preset(&d, &preset))
+        }
+        Cmd::Apply { profile, options, machine } => {
+            default_dir(options, None).and_then(|o| apply::run(&profile, &o, &machine))
+        }
     };
     match result {
         Ok(code) => ExitCode::from(code as u8),

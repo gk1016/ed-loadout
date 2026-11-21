@@ -458,3 +458,109 @@ fn v01_c2_apply_ssaa_with_no_parsable_fxcfg_is_an_error() {
         .code(3);
     assert!(!target.join("_loadout-backup").exists());
 }
+
+/// A LOCALAPPDATA root holding a fixture copy at the default Options path.
+fn local_appdata() -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let opts = tmp.path().join("LocalAppData/Frontier Developments/Elite Dangerous/Options");
+    copy_tree(&fixture(), &opts);
+    (tmp, opts)
+}
+
+#[test]
+fn v01_c3_capture_defaults_to_localappdata_options() {
+    let (tmp, opts) = local_appdata();
+    let explicit = tmp.path().join("explicit");
+    capture(&opts, &explicit, "devmachine02");
+    let defaulted = tmp.path().join("defaulted");
+    let out = bin()
+        .env("LOCALAPPDATA", tmp.path().join("LocalAppData"))
+        .args(["capture", "--out"])
+        .arg(&defaulted)
+        .args(["--machine", "devmachine02"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let out = String::from_utf8(out).unwrap();
+    assert!(out.starts_with(&format!("options dir: {}\n", opts.display())), "{out}");
+
+    // Same result as v0 criterion 1: same file set, same bytes, same sha256.
+    let files = |p: &Path| {
+        let t: toml::Table = fs::read_to_string(p.join("profile.toml")).unwrap().parse().unwrap();
+        t["files"].as_table().unwrap().clone()
+    };
+    assert_eq!(files(&defaulted), files(&explicit));
+    assert_eq!(files(&defaulted).len(), 7);
+    for rel in files(&defaulted).keys() {
+        assert_eq!(
+            fs::read(defaulted.join("files").join(rel)).unwrap(),
+            fs::read(fixture().join(rel)).unwrap(),
+            "{rel}"
+        );
+    }
+}
+
+#[test]
+fn v01_c3_unset_localappdata_exits_3_naming_the_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let err = bin()
+        .env_remove("LOCALAPPDATA")
+        .args(["capture", "--out"])
+        .arg(tmp.path().join("p"))
+        .args(["--machine", "a"])
+        .assert()
+        .code(3)
+        .get_output()
+        .stderr
+        .clone();
+    let err = String::from_utf8(err).unwrap();
+    assert_eq!(err.lines().count(), 1, "{err}");
+    assert!(err.contains("LOCALAPPDATA is not set"), "{err}");
+    assert!(err.contains("Frontier Developments/Elite Dangerous/Options"), "{err}");
+    assert!(!tmp.path().join("p").exists());
+}
+
+#[test]
+fn v01_c3_missing_default_dir_exits_3_naming_the_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let err = bin()
+        .env("LOCALAPPDATA", tmp.path())
+        .args(["check-binds", "--devices", ""])
+        .assert()
+        .code(3)
+        .get_output()
+        .stderr
+        .clone();
+    let err = String::from_utf8(err).unwrap();
+    let tried = tmp.path().join("Frontier Developments/Elite Dangerous/Options/Bindings");
+    assert_eq!(err, format!("error: {}: Bindings dir not found; pass the Bindings dir\n", tried.display()));
+}
+
+#[test]
+fn v01_c3_binds_commands_and_apply_default_too() {
+    let (tmp, opts) = local_appdata();
+    let lad = tmp.path().join("LocalAppData");
+    let bindings = opts.join("Bindings");
+    let out = stdout_of(
+        bin().env("LOCALAPPDATA", &lad).args(["check-binds", "--devices", "231D0126,231D0127,231D2204,045e0b22"]),
+        0,
+    );
+    assert!(out.starts_with(&format!("bindings dir: {}\n", bindings.display())), "{out}");
+
+    fs::copy(fixture().join("Bindings/StartPreset.4.start.broken"), bindings.join("StartPreset.4.start")).unwrap();
+    bin().env("LOCALAPPDATA", &lad).arg("restore-preset").assert().success();
+    assert_eq!(fs::read(bindings.join("StartPreset.4.start")).unwrap(), b"Custom\r\nCustom\r\nCustom\r\nCustom\r\n");
+
+    let profile = laptop_profile(tmp.path(), &fixture(), "\n[machine.laptop]\nmax_fps = 120\n");
+    bin()
+        .env("LOCALAPPDATA", &lad)
+        .arg("apply")
+        .arg(&profile)
+        .args(["--machine", "laptop"])
+        .assert()
+        .success();
+    assert!(opts.join("_loadout-backup").is_dir());
+    assert!(fs::read_to_string(opts.join("Graphics/DisplaySettings.xml")).unwrap().contains("<MaxFramesPerSecond>120<"));
+}

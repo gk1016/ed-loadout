@@ -197,6 +197,17 @@ fn replace_element(text: &str, tag: &str, value: &str) -> Result<String, String>
     if found.next().is_some() {
         return Err(format!("<{tag}> occurs more than once"));
     }
+    // The single literal match must be a real child of the root, not text
+    // inside a comment or CDATA.
+    let doc = roxmltree::Document::parse(text).map_err(|e| format!("not well-formed XML: {e}"))?;
+    let real = doc
+        .root_element()
+        .children()
+        .filter(|n| n.is_element() && n.tag_name().name() == tag)
+        .count();
+    if real != 1 {
+        return Err(format!("<{tag}> not found as an element; ed-loadout replaces elements, it never inserts"));
+    }
     let body = start + open.len();
     let end = text[body..]
         .find(&close)
@@ -233,6 +244,8 @@ mod tests {
         assert!(replace_element(s, "C", "1").unwrap_err().contains("never inserts"));
         assert!(replace_element("<A/>", "A", "1").is_err());
         assert!(replace_element("<A>1</A><A>2</A>", "A", "3").is_err());
+        let commented = "<R>\n\t<!-- <A>1</A> -->\n\t<B>x</B>\n</R>\n";
+        assert!(replace_element(commented, "A", "2").unwrap_err().contains("never inserts"));
     }
 
     #[test]

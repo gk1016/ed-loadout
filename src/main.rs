@@ -3,6 +3,7 @@
 //! Exit codes: 0 ok / identical, 1 differences or problems found,
 //! 2 refused (game running) or usage error, 3 error.
 
+mod binds;
 mod bundle;
 mod capture;
 mod diff;
@@ -37,6 +38,22 @@ enum Cmd {
         profile_a: PathBuf,
         profile_b: PathBuf,
     },
+    /// Report bound devices that are missing and a clobbered StartPreset.4.start.
+    /// Exit 1 when any device is missing or any preset line is not Custom.
+    #[command(group = clap::ArgGroup::new("source").required(true).args(["devices", "from_log"]))]
+    CheckBinds {
+        /// Bindings dir (holds the .binds files and StartPreset.4.start).
+        bindings_dir: PathBuf,
+        /// Comma-separated GUIDs of the devices connected now.
+        #[arg(long)]
+        devices: Option<String>,
+        /// Take missing GUIDs from BindingLoadingErrors.log.
+        #[arg(long)]
+        from_log: bool,
+        /// Binds file to check (default: named by the log, else newest Custom.4.*.binds).
+        #[arg(long)]
+        binds: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -44,6 +61,9 @@ fn main() -> ExitCode {
     let result = match cli.cmd {
         Cmd::Capture { options, out, machine } => capture::run(&options, &out, &machine),
         Cmd::Diff { profile_a, profile_b } => diff::run(&profile_a, &profile_b),
+        Cmd::CheckBinds { bindings_dir, devices, from_log, binds } => {
+            binds::run(&bindings_dir, devices.as_deref(), from_log, binds.as_deref())
+        }
     };
     match result {
         Ok(code) => ExitCode::from(code as u8),

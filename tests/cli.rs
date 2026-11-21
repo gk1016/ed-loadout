@@ -162,3 +162,77 @@ fn c2_diff_line_diff_and_one_side_only() {
     assert!(out.contains("-Custom\n"), "{out}");
     assert!(out.contains("+GenericJoystick\n"), "{out}");
 }
+
+// ---- Criterion 3: check-binds ---------------------------------------------
+
+fn stdout_of(cmd: &mut Command, code: i32) -> String {
+    let out = cmd.assert().code(code).get_output().stdout.clone();
+    String::from_utf8(out).unwrap()
+}
+
+#[test]
+fn c3a_devices_missing_xbox_pad_exits_1() {
+    let (_tmp, opts) = fixture_copy();
+    let out = stdout_of(
+        bin()
+            .arg("check-binds")
+            .arg(opts.join("Bindings"))
+            .args(["--devices", "231D0126,231D0127,231D2204"]),
+        1,
+    );
+    assert!(out.contains("045E0B22 (3 bindings)"), "{out}");
+    assert!(!out.contains("231D0126 ("), "{out}");
+    assert!(!out.contains("warning:"), "{out}");
+    assert!(out.contains("Custom.4.2.binds (from BindingLoadingErrors.log)"), "{out}");
+}
+
+#[test]
+fn c3b_all_devices_present_exits_0() {
+    let (_tmp, opts) = fixture_copy();
+    let out = stdout_of(
+        bin()
+            .arg("check-binds")
+            .arg(opts.join("Bindings"))
+            .args(["--devices", "231D0126,231D0127,231D2204,045e0b22"]),
+        0,
+    );
+    assert!(!out.contains("missing device"), "{out}");
+}
+
+#[test]
+fn c3c_broken_preset_from_log_reports_pad_and_four_warnings() {
+    let (_tmp, opts) = fixture_copy();
+    let b = opts.join("Bindings");
+    fs::rename(b.join("StartPreset.4.start.broken"), b.join("StartPreset.4.start")).unwrap();
+    let out = stdout_of(bin().arg("check-binds").arg(&b).arg("--from-log"), 1);
+    assert!(out.contains("Custom.4.2.binds (from BindingLoadingErrors.log)"), "{out}");
+    assert!(out.contains("missing device: 045E0B22 (3 bindings)"), "{out}");
+    assert_eq!(out.matches("missing device").count(), 1, "{out}");
+    for (n, v) in [(1, "KeyboardMouseOnly"), (2, "GenericJoystick"), (3, "KeyboardMouseOnly"), (4, "KeyboardMouseOnly")] {
+        assert!(out.contains(&format!("StartPreset.4.start line {n}: \"{v}\", not Custom")), "{out}");
+    }
+}
+
+#[test]
+fn c3_resolution_falls_back_to_newest_custom_binds() {
+    let (_tmp, opts) = fixture_copy();
+    let b = opts.join("Bindings");
+    fs::remove_file(b.join("BindingLoadingErrors.log")).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    fs::write(b.join("Custom.4.9.binds"), "<Root><Primary Device=\"ABCD0001\" Key=\"x\" /></Root>").unwrap();
+    let out = stdout_of(bin().arg("check-binds").arg(&b).args(["--devices", ""]), 1);
+    assert!(out.contains("Custom.4.9.binds (from newest Custom.4.*.binds)"), "{out}");
+    assert!(out.contains("missing device: ABCD0001 (1 binding)"), "{out}");
+    // --binds wins over everything.
+    let out = stdout_of(
+        bin().arg("check-binds").arg(&b).args(["--devices", "231D0126,231D0127,045E0B22", "--binds", "Custom.4.2.binds"]),
+        0,
+    );
+    assert!(out.contains("Custom.4.2.binds (from --binds)"), "{out}");
+}
+
+#[test]
+fn c3_requires_devices_or_from_log() {
+    let (_tmp, opts) = fixture_copy();
+    bin().arg("check-binds").arg(opts.join("Bindings")).assert().code(2);
+}

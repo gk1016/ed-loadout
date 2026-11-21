@@ -21,7 +21,7 @@ folder on your `PATH`, or run it from the Options dir. It is a console program: 
 from PowerShell or `cmd`, not by double-clicking.
 
 Without `--options` (or the `<Bindings dir>` argument of `check-binds` and
-`restore-preset`) every command uses
+`restore-preset`), `capture`, `apply`, `check-binds` and `restore-preset` use
 `%LOCALAPPDATA%\Frontier Developments\Elite Dangerous\Options` (and its `Bindings`
 dir) and prints the path it resolved. If `LOCALAPPDATA` is unset or that dir does not
 exist it exits 3 and names the path it tried.
@@ -47,7 +47,8 @@ max_fps = <frame cap>
 ```
 
 Check the desktop's bindings against the controllers plugged into the laptop, giving
-the laptop's device GUIDs (or use `--from-log` after a launch that dropped a device):
+the laptop's device GUIDs (not `--from-log`: the laptop's log describes the laptop's
+own preset, not the desktop's):
 
 ```
 ed-loadout check-binds --devices <GUID,GUID,...> --binds desk\files\Bindings\Custom.4.2.binds
@@ -182,7 +183,9 @@ absent is an error and nothing is written; elements are never inserted.
 
 The `ssaa` target is the `Graphics/Custom.<Major>.<Minor>.fxcfg` with the highest
 version, the one Elite reads; older versions left by game updates are written as
-captured. Other `Custom.*fxcfg*` names (a `.bak`, say) are ignored with a notice.
+captured. Other `Custom.*fxcfg*` names (a `.bak`, say) are ignored with a notice. If
+the Options dir already holds a newer `Custom.*.fxcfg` than the profile's (the target
+machine is on a later game version), `ssaa` is an error and nothing is written.
 
 Render scale is per GPU: do not copy devmachine02's SSAA 1.5 to a smaller card, give
 that machine its own `ssaa`.

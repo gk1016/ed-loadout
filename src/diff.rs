@@ -65,18 +65,21 @@ pub fn run(a: &Path, b: &Path) -> Result<i32, String> {
     Ok(if differ { 1 } else { 0 })
 }
 
-/// (name, text) for each child element of the root, in document order.
+/// (name, text) for each child element of the root, in document order. A
+/// repeated name is keyed by occurrence: `Name`, `Name[2]`, `Name[3]`...
 fn flat_elements(text: &str) -> Option<Vec<(String, String)>> {
     let doc = roxmltree::Document::parse(text).ok()?;
+    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     Some(
         doc.root_element()
             .children()
             .filter(|n| n.is_element())
             .map(|n| {
-                (
-                    n.tag_name().name().to_owned(),
-                    n.text().unwrap_or("").trim().to_owned(),
-                )
+                let name = n.tag_name().name();
+                let k = seen.entry(name).or_insert(0);
+                *k += 1;
+                let key = if *k == 1 { name.to_owned() } else { format!("{name}[{k}]") };
+                (key, n.text().unwrap_or("").trim().to_owned())
             })
             .collect(),
     )
@@ -121,6 +124,16 @@ mod tests {
                 ("B".to_string(), "2".to_string(), "(absent)".to_string()),
                 ("C".to_string(), "(absent)".to_string(), "3".to_string()),
             ]
+        );
+    }
+
+    #[test]
+    fn repeated_siblings_are_compared_by_occurrence() {
+        let a = flat_elements("<R><A>1</A><A>2</A></R>").unwrap();
+        let b = flat_elements("<R><A>1</A><A>3</A></R>").unwrap();
+        assert_eq!(
+            element_diff(&a, &b),
+            vec![("A[2]".to_string(), "2".to_string(), "3".to_string())]
         );
     }
 }

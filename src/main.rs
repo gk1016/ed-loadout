@@ -44,7 +44,9 @@ enum Cmd {
     },
     /// Report bound devices that are missing and a clobbered StartPreset.4.start.
     /// Exit 1 when any device is missing or any preset line is not Custom.
-    #[command(group = clap::ArgGroup::new("source").required(true).args(["devices", "from_log"]))]
+    /// With neither --devices nor --from-log, the connected devices come from
+    /// the device facts (detected on Windows, else --facts).
+    #[command(group = clap::ArgGroup::new("source").args(["devices", "from_log"]))]
     CheckBinds {
         /// Bindings dir (holds the .binds files and StartPreset.4.start).
         /// Default: the Bindings dir under the default Options dir.
@@ -58,6 +60,9 @@ enum Cmd {
         /// Binds file to check (default: named by the log, else newest Custom.4.*.binds).
         #[arg(long)]
         binds: Option<PathBuf>,
+        /// Facts TOML to take the connected devices from instead of detecting.
+        #[arg(long, conflicts_with_all = ["devices", "from_log"])]
+        facts: Option<PathBuf>,
     },
     /// Rewrite StartPreset.4.start to four lines of the preset name (CRLF),
     /// after backing up the old file.
@@ -84,6 +89,9 @@ enum Cmd {
         /// Facts TOML to use instead of detecting this machine.
         #[arg(long)]
         facts: Option<PathBuf>,
+        /// Exit 1 and write nothing when a bound device is not connected.
+        #[arg(long)]
+        strict_binds: bool,
     },
     /// Print the panel, GPU and connected devices, and the values derived
     /// from them. Windows detects; elsewhere pass --facts.
@@ -126,13 +134,25 @@ fn main() -> ExitCode {
             default_dir(options, None).and_then(|o| capture::run(&o, &out, &machine))
         }
         Cmd::Diff { profile_a, profile_b } => diff::run(&profile_a, &profile_b),
-        Cmd::CheckBinds { bindings_dir, devices, from_log, binds } => default_dir(bindings_dir, Some("Bindings"))
-            .and_then(|d| binds::run(&d, devices.as_deref(), from_log, binds.as_deref())),
+        Cmd::CheckBinds { bindings_dir, devices, from_log, binds, facts } => {
+            default_dir(bindings_dir, Some("Bindings")).and_then(|d| {
+                let devices = match devices {
+                    None if !from_log => {
+                        let f = facts::load(facts.as_deref())?
+                            .ok_or_else(|| format!("no --devices or --from-log; {}", facts::NO_FACTS))?;
+                        println!("devices: {} (from device facts)", f.devices.join(","));
+                        Some(f.devices.join(","))
+                    }
+                    d => d,
+                };
+                binds::run(&d, devices.as_deref(), from_log, binds.as_deref())
+            })
+        }
         Cmd::RestorePreset { bindings_dir, preset } => {
             default_dir(bindings_dir, Some("Bindings")).and_then(|d| binds::restore_preset(&d, &preset))
         }
-        Cmd::Apply { profile, options, machine, facts } => default_dir(options, None)
-            .and_then(|o| apply::run(&profile, &o, machine.as_deref(), facts.as_deref())),
+        Cmd::Apply { profile, options, machine, facts, strict_binds } => default_dir(options, None)
+            .and_then(|o| apply::run(&profile, &o, machine.as_deref(), facts.as_deref(), strict_binds)),
         Cmd::Detect { facts, dump } => facts::run_detect(facts.as_deref(), dump.as_deref()),
     };
     match result {

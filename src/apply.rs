@@ -1,6 +1,7 @@
 //! `apply`: back up, write the profile files, apply `[machine.<name>]`
 //! overrides by replacing element text in place. Never inserts an element.
 
+use crate::binds;
 use crate::bundle::{backup_stamp, join_rel, scan_profile};
 use crate::facts::{self, Facts};
 use crate::tiers::{self, OverrideTier, fmt_ssaa};
@@ -39,8 +40,14 @@ pub fn game_running() -> bool {
     false
 }
 
-pub fn run(profile: &Path, options: &Path, machine: Option<&str>, facts_file: Option<&Path>) -> Result<i32, String> {
-    run_with(profile, options, machine, facts_file, game_running())
+pub fn run(
+    profile: &Path,
+    options: &Path,
+    machine: Option<&str>,
+    facts_file: Option<&Path>,
+    strict_binds: bool,
+) -> Result<i32, String> {
+    run_with(profile, options, machine, facts_file, strict_binds, game_running())
 }
 
 /// `running` is injected so the refusal path is testable off Windows.
@@ -49,6 +56,7 @@ pub fn run_with(
     options: &Path,
     machine: Option<&str>,
     facts_file: Option<&Path>,
+    strict_binds: bool,
     running: bool,
 ) -> Result<i32, String> {
     if running {
@@ -59,6 +67,9 @@ pub fn run_with(
     let facts = facts::load(facts_file)?;
     if facts.is_none() {
         eprintln!("notice: {}", facts::NO_FACTS);
+        if strict_binds {
+            return Err(format!("--strict-binds needs device facts; {}", facts::NO_FACTS));
+        }
     }
     let toml_path = profile.join("profile.toml");
     let table: toml::Table = fs::read_to_string(&toml_path)
@@ -74,6 +85,17 @@ pub fn run_with(
         let p = join_rel(&profile.join("files"), &rel);
         let bytes = fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?;
         files.insert(rel, bytes);
+    }
+    let unconnected = match &facts {
+        Some(f) => binds_check(&files, &f.devices),
+        None => {
+            eprintln!("binds check skipped (no device facts)");
+            0
+        }
+    };
+    if strict_binds && unconnected > 0 {
+        eprintln!("refusing: --strict-binds and {unconnected} bound device(s) not connected; nothing written");
+        return Ok(1);
     }
     match overrides.override_tier.unwrap_or(OverrideTier::Captured) {
         OverrideTier::Captured => {}
@@ -125,6 +147,27 @@ pub fn run_with(
         println!("wrote {rel}");
     }
     Ok(0)
+}
+
+/// Warn for every device bound in the profile's highest
+/// `Bindings/Custom.4.<n>.binds` (the file about to be written) that is not in
+/// `devices`. Returns how many.
+fn binds_check(files: &BTreeMap<String, Vec<u8>>, devices: &[String]) -> usize {
+    let Some(rel) = binds::highest_custom4(files.keys()) else {
+        println!("binds check skipped (profile has no Bindings/Custom.4.<n>.binds)");
+        return 0;
+    };
+    println!("binds check: {rel} against {} connected device(s)", devices.len());
+    let bound = binds::bound_devices(&String::from_utf8_lossy(&files[rel]));
+    let mut n = 0;
+    for (guid, count) in &bound {
+        if !devices.iter().any(|d| d.eq_ignore_ascii_case(guid)) {
+            let plural = if *count == 1 { "binding" } else { "bindings" };
+            println!("warning: bound device {guid} ({count} {plural}) is not connected");
+            n += 1;
+        }
+    }
+    n
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -387,7 +430,7 @@ mod tests {
         let options = tmp.path().join("Options");
         fs::create_dir_all(&options).unwrap();
         // The profile does not even exist: refusal comes before any read.
-        let code = run_with(&tmp.path().join("nope"), &options, Some("laptop"), None, true).unwrap();
+        let code = run_with(&tmp.path().join("nope"), &options, Some("laptop"), None, false, true).unwrap();
         assert_eq!(code, 2);
         assert_eq!(fs::read_dir(&options).unwrap().count(), 0);
     }

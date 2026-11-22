@@ -253,10 +253,15 @@ fn c3_resolution_falls_back_to_newest_custom_binds() {
     assert!(out.contains("Custom.4.2.binds (from --binds)"), "{out}");
 }
 
+/// v0.2 criterion 4: without --devices or --from-log the devices come from
+/// facts; off Windows with no --facts that is exit 3 naming the flag.
+#[cfg(not(windows))]
 #[test]
 fn c3_requires_devices_or_from_log() {
     let (_tmp, opts) = fixture_copy();
-    bin().arg("check-binds").arg(opts.join("Bindings")).assert().code(2);
+    let err = bin().arg("check-binds").arg(opts.join("Bindings")).assert().code(3).get_output().stderr.clone();
+    let err = String::from_utf8(err).unwrap();
+    assert!(err.contains("pass --facts"), "{err}");
 }
 
 // ---- Criterion 4: restore-preset ------------------------------------------
@@ -845,4 +850,88 @@ fn v02_c3_unknown_machine_key_still_rejected() {
     let err = bin().arg("apply").arg(&profile).arg("--options").arg(&target).args(["--machine", "laptop"]).assert().code(3).get_output().stderr.clone();
     assert!(String::from_utf8(err).unwrap().contains("[machine.laptop] terrain: unknown override"));
     assert!(!target.join("_loadout-backup").exists());
+}
+
+/// `devmachine02.toml` without 045E0B22, written into `dir`.
+fn facts_without_pad(dir: &Path) -> PathBuf {
+    let text = fs::read_to_string(facts_file("devmachine02.toml")).unwrap().replace(", \"045E0B22\"", "");
+    assert!(!text.contains("045E0B22"));
+    let p = dir.join("no-pad.toml");
+    fs::write(&p, text).unwrap();
+    p
+}
+
+#[test]
+fn v02_c4_check_binds_takes_devices_from_facts() {
+    let (tmp, opts) = fixture_copy();
+    let b = opts.join("Bindings");
+    let out = stdout_of(bin().arg("check-binds").arg(&b).arg("--facts").arg(facts_file("devmachine02.toml")), 0);
+    assert!(out.contains("devices: 231D0126,231D0127,231D2204,045E0B22 (from device facts)\n"), "{out}");
+    let out = stdout_of(bin().arg("check-binds").arg(&b).arg("--facts").arg(facts_without_pad(tmp.path())), 1);
+    assert!(out.contains("missing device: 045E0B22 (3 bindings)\n"), "{out}");
+    // --devices and --facts together is a usage error.
+    bin().arg("check-binds").arg(&b).args(["--devices", ""]).arg("--facts").arg(facts_file("devmachine02.toml")).assert().code(2);
+}
+
+#[test]
+fn v02_c4_apply_warns_for_an_unconnected_bound_device_and_writes() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "");
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+    let (code, out, err) = apply_with_facts(&profile, &target, &facts_without_pad(tmp.path()), &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("binds check: Bindings/Custom.4.2.binds against 3 connected device(s)\n"), "{out}");
+    assert!(out.contains("warning: bound device 045E0B22 (3 bindings) is not connected\n"), "{out}");
+    assert_eq!(out.matches("is not connected").count(), 1, "{out}");
+    assert!(out.contains("wrote Bindings/Custom.4.2.binds\n"), "{out}");
+    assert!(target.join("_loadout-backup").is_dir());
+}
+
+#[test]
+fn v02_c4_strict_binds_refuses_and_writes_nothing() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "");
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+    let (code, out, err) = apply_with_facts(&profile, &target, &facts_without_pad(tmp.path()), &["--strict-binds"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(out.contains("warning: bound device 045E0B22 (3 bindings) is not connected\n"), "{out}");
+    assert!(err.contains("refusing: --strict-binds"), "{err}");
+    assert!(!out.contains("wrote "), "{out}");
+    assert!(!target.join("_loadout-backup").exists());
+    assert_eq!(
+        fs::read(target.join("Graphics/DisplaySettings.xml")).unwrap(),
+        fs::read(fixture().join("Graphics/DisplaySettings.xml")).unwrap()
+    );
+    // Every bound device connected: strict passes.
+    let (code, _, _) = apply_with_facts(&profile, &target, &facts_file("devmachine02.toml"), &["--strict-binds"]);
+    assert_eq!(code, 0);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn v02_c4_strict_binds_without_facts_exits_3_writing_nothing() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "");
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+    let out = bin().arg("apply").arg(&profile).arg("--options").arg(&target).arg("--strict-binds").output().unwrap();
+    assert_eq!(out.status.code(), Some(3));
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert!(err.contains("--strict-binds needs device facts") && err.contains("pass --facts"), "{err}");
+    assert!(!target.join("_loadout-backup").exists());
+}
+
+#[cfg(not(windows))]
+#[test]
+fn v02_c4_apply_without_facts_skips_the_binds_check() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "");
+    let target = tmp.path().join("Target");
+    fs::create_dir_all(&target).unwrap();
+    let out = bin().arg("apply").arg(&profile).arg("--options").arg(&target).output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(err.matches("binds check skipped (no device facts)").count(), 1, "{err}");
 }

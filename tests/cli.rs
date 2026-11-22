@@ -787,6 +787,9 @@ fn v02_c2_unknown_gpu_leaves_the_target_override_alone() {
     assert!(fs::read_to_string(target.join("Graphics/Custom.4.4.fxcfg")).unwrap().contains("<SSAAMultiplier>1.000000<"));
 }
 
+/// Off Windows only: on Windows, no --facts means the real hardware is
+/// detected and derived values apply (Codex check 3).
+#[cfg(not(windows))]
 #[test]
 fn v02_c2_no_facts_no_machine_applies_as_captured() {
     let (tmp, src) = fixture_copy();

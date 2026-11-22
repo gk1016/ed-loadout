@@ -105,14 +105,216 @@ fn detect() -> Result<Option<Facts>, String> {
     Ok(None)
 }
 
+/// A failed detection is a notice and no facts, so `apply` still runs.
 #[cfg(windows)]
 fn detect() -> Result<Option<Facts>, String> {
-    Ok(None)
+    match win::detect() {
+        Ok(f) => Ok(Some(f)),
+        Err(e) => {
+            eprintln!("notice: device detection failed: {e}");
+            Ok(None)
+        }
+    }
+}
+
+/// `\\?\HID#VID_231D&PID_0126&MI_00#...` -> `231D0126`. Case-insensitive;
+/// anything without `VID_xxxx&PID_xxxx` -> None.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn vid_pid(device_name: &str) -> Option<String> {
+    let up = device_name.to_ascii_uppercase();
+    let i = up.find("VID_")?;
+    let rest = &up[i + 4..];
+    let (vid, rest) = (rest.get(..4)?, rest.get(4..)?);
+    let pid = rest.strip_prefix("&PID_")?.get(..4)?;
+    let hex = |s: &str| s.bytes().all(|b| b.is_ascii_hexdigit());
+    (hex(vid) && hex(pid)).then(|| format!("{vid}{pid}"))
+}
+
+/// The Win32 backend: `EnumDisplaySettingsExW`, DXGI, Raw Input.
+#[cfg(windows)]
+mod win {
+    use super::{Facts, vid_pid};
+    use std::ffi::c_void;
+    use std::ptr::null_mut;
+    use windows_sys::Win32::Graphics::Gdi::{DEVMODEW, ENUM_CURRENT_SETTINGS, EnumDisplaySettingsExW};
+    use windows_sys::Win32::UI::Input::{
+        GetRawInputDeviceInfoW, GetRawInputDeviceList, RAWINPUTDEVICELIST, RIDI_DEVICENAME,
+    };
+    use windows_sys::core::{GUID, HRESULT};
+
+    // DXGI is COM and not in windows-sys; the one entry point is declared
+    // the way windows-link declares its own, and the two interfaces are
+    // called through their vtables. No CoInitialize is needed for DXGI.
+    #[link(name = "dxgi.dll", kind = "raw-dylib", modifiers = "+verbatim")]
+    unsafe extern "system" {
+        fn CreateDXGIFactory1(riid: *const GUID, factory: *mut *mut c_void) -> HRESULT;
+    }
+
+    const IID_IDXGIFACTORY1: GUID = GUID {
+        data1: 0x770a_ae78,
+        data2: 0xf26f,
+        data3: 0x4dba,
+        data4: [0xa8, 0x29, 0x25, 0x3c, 0x83, 0xd1, 0xb3, 0x87],
+    };
+    const DXGI_ERROR_NOT_FOUND: HRESULT = 0x887A_0002_u32 as i32;
+    const DXGI_ADAPTER_FLAG_SOFTWARE: u32 = 2;
+
+    type Release = unsafe extern "system" fn(*mut c_void) -> u32;
+
+    /// IDXGIFactory1: IUnknown (0-2), IDXGIObject (3-6), IDXGIFactory (7-11), EnumAdapters1 = 12.
+    #[repr(C)]
+    struct FactoryVtbl {
+        _query_add_ref: [usize; 2],
+        release: Release,
+        _skip: [usize; 9],
+        enum_adapters1: unsafe extern "system" fn(*mut c_void, u32, *mut *mut c_void) -> HRESULT,
+    }
+
+    /// IDXGIAdapter1: IUnknown (0-2), IDXGIObject (3-6), IDXGIAdapter (7-9), GetDesc1 = 10.
+    #[repr(C)]
+    struct AdapterVtbl {
+        _query_add_ref: [usize; 2],
+        release: Release,
+        _skip: [usize; 7],
+        get_desc1: unsafe extern "system" fn(*mut c_void, *mut AdapterDesc1) -> HRESULT,
+    }
+
+    /// DXGI_ADAPTER_DESC1.
+    #[repr(C)]
+    struct AdapterDesc1 {
+        description: [u16; 128],
+        vendor_id: u32,
+        device_id: u32,
+        sub_sys_id: u32,
+        revision: u32,
+        dedicated_video_memory: usize,
+        dedicated_system_memory: usize,
+        shared_system_memory: usize,
+        adapter_luid: [u32; 2],
+        flags: u32,
+    }
+
+    fn wide(buf: &[u16]) -> String {
+        let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+        String::from_utf16_lossy(&buf[..end])
+    }
+
+    pub fn detect() -> Result<Facts, String> {
+        let (screen_w, screen_h, refresh_hz) = panel()?;
+        let (gpu_name, gpu_vram_mb) = gpu()?;
+        Ok(Facts {
+            hostname: std::env::var("COMPUTERNAME").unwrap_or_default(),
+            screen_w,
+            screen_h,
+            refresh_hz,
+            gpu_name,
+            gpu_vram_mb,
+            devices: devices()?,
+        })
+    }
+
+    /// Current mode of the primary display.
+    fn panel() -> Result<(i64, i64, i64), String> {
+        // SAFETY: DEVMODEW is plain data; zeroed with dmSize set is the
+        // documented input to EnumDisplaySettingsExW.
+        let mut dm: DEVMODEW = unsafe { std::mem::zeroed() };
+        dm.dmSize = std::mem::size_of::<DEVMODEW>() as u16;
+        // SAFETY: null device name = the primary display; dm outlives the call.
+        if unsafe { EnumDisplaySettingsExW(std::ptr::null(), ENUM_CURRENT_SETTINGS, &mut dm, 0) } == 0 {
+            return Err("EnumDisplaySettingsExW failed".into());
+        }
+        Ok((dm.dmPelsWidth.into(), dm.dmPelsHeight.into(), dm.dmDisplayFrequency.into()))
+    }
+
+    /// Description and dedicated VRAM (MB) of the first non-software adapter.
+    fn gpu() -> Result<(String, i64), String> {
+        let mut factory: *mut c_void = null_mut();
+        // SAFETY: valid IID and out-pointer.
+        let hr = unsafe { CreateDXGIFactory1(&IID_IDXGIFACTORY1, &mut factory) };
+        if hr < 0 || factory.is_null() {
+            return Err(format!("CreateDXGIFactory1 failed (0x{hr:08X})"));
+        }
+        // SAFETY: a COM object's first field is its vtable pointer; the
+        // layouts above follow dxgi.h. Every adapter and the factory are
+        // released exactly once.
+        unsafe {
+            let fv = &**(factory as *const *const FactoryVtbl);
+            let mut found = Err("no hardware DXGI adapter".to_owned());
+            for i in 0.. {
+                let mut adapter: *mut c_void = null_mut();
+                let hr = (fv.enum_adapters1)(factory, i, &mut adapter);
+                if hr == DXGI_ERROR_NOT_FOUND {
+                    break;
+                }
+                if hr < 0 || adapter.is_null() {
+                    found = Err(format!("EnumAdapters1({i}) failed (0x{hr:08X})"));
+                    break;
+                }
+                let av = &**(adapter as *const *const AdapterVtbl);
+                let mut desc: AdapterDesc1 = std::mem::zeroed();
+                let hr = (av.get_desc1)(adapter, &mut desc);
+                (av.release)(adapter);
+                if hr >= 0 && desc.flags & DXGI_ADAPTER_FLAG_SOFTWARE == 0 {
+                    found = Ok((wide(&desc.description), (desc.dedicated_video_memory / (1024 * 1024)) as i64));
+                    break;
+                }
+            }
+            (fv.release)(factory);
+            found
+        }
+    }
+
+    /// `VVVVPPPP` of every Raw Input device whose name carries VID/PID, deduped.
+    fn devices() -> Result<Vec<String>, String> {
+        let size = std::mem::size_of::<RAWINPUTDEVICELIST>() as u32;
+        let mut n = 0u32;
+        // SAFETY: a null list asks for the count only.
+        if unsafe { GetRawInputDeviceList(null_mut(), &mut n, size) } == u32::MAX {
+            return Err("GetRawInputDeviceList failed".into());
+        }
+        // SAFETY: plain data, overwritten by the call.
+        let mut list: Vec<RAWINPUTDEVICELIST> = (0..n).map(|_| unsafe { std::mem::zeroed() }).collect();
+        // SAFETY: list holds n entries of `size` bytes.
+        let got = unsafe { GetRawInputDeviceList(list.as_mut_ptr(), &mut n, size) };
+        if got == u32::MAX {
+            return Err("GetRawInputDeviceList failed (device list changed?)".into());
+        }
+        let mut out: Vec<String> = Vec::new();
+        for d in list.iter().take(got as usize) {
+            let mut len = 0u32;
+            // SAFETY: null data asks for the name length in characters.
+            unsafe { GetRawInputDeviceInfoW(d.hDevice, RIDI_DEVICENAME, null_mut(), &mut len) };
+            if len == 0 {
+                continue;
+            }
+            let mut buf = vec![0u16; len as usize];
+            // SAFETY: buf holds len characters.
+            let r = unsafe { GetRawInputDeviceInfoW(d.hDevice, RIDI_DEVICENAME, buf.as_mut_ptr().cast(), &mut len) };
+            if r == 0 || r == u32::MAX {
+                continue;
+            }
+            if let Some(g) = vid_pid(&wide(&buf))
+                && !out.contains(&g)
+            {
+                out.push(g);
+            }
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vid_pid_parses_raw_input_names() {
+        assert_eq!(vid_pid(r"\\?\HID#VID_231D&PID_0126&MI_00#8&1a2b3c&0&0000#{4d1e55b2-f16f-11cf-88cb-001111000030}").as_deref(), Some("231D0126"));
+        assert_eq!(vid_pid(r"\\?\HID#vid_045e&pid_0b22&IG_00#9&2c").as_deref(), Some("045E0B22"));
+        assert_eq!(vid_pid(r"\\?\ACPI#PNP0303#4&1d401fb5&0#{884b96c3-56ef-11d1-bc8c-00a0c91405dd}"), None);
+        assert_eq!(vid_pid("VID_12&PID_3456"), None);
+        assert_eq!(vid_pid("VID_ZZZZ&PID_0001"), None);
+    }
 
     #[test]
     fn toml_round_trip_and_unknown_key() {

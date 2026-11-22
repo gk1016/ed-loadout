@@ -135,17 +135,18 @@ fn main() -> ExitCode {
         }
         Cmd::Diff { profile_a, profile_b } => diff::run(&profile_a, &profile_b),
         Cmd::CheckBinds { bindings_dir, devices, from_log, binds, facts } => {
-            default_dir(bindings_dir, Some("Bindings")).and_then(|d| {
-                let devices = match devices {
-                    None if !from_log => {
-                        let f = facts::load(facts.as_deref())?
-                            .ok_or_else(|| format!("no --devices or --from-log; {}", facts::NO_FACTS))?;
-                        println!("devices: {} (from device facts)", f.devices.join(","));
-                        Some(f.devices.join(","))
-                    }
-                    d => d,
-                };
-                binds::run(&d, devices.as_deref(), from_log, binds.as_deref())
+            // The device source first: without one, that is the error to report.
+            let devices = match devices {
+                None if !from_log => facts::load(facts.as_deref()).and_then(|f| {
+                    let f = f.ok_or_else(|| format!("no --devices or --from-log; {}", facts::NO_FACTS))?;
+                    println!("devices: {} (from device facts)", f.devices.join(","));
+                    Ok(Some(f.devices.join(",")))
+                }),
+                d => Ok(d),
+            };
+            devices.and_then(|devices| {
+                default_dir(bindings_dir, Some("Bindings"))
+                    .and_then(|d| binds::run(&d, devices.as_deref(), from_log, binds.as_deref()))
             })
         }
         Cmd::RestorePreset { bindings_dir, preset } => {

@@ -262,6 +262,10 @@ fn c3_requires_devices_or_from_log() {
     let err = bin().arg("check-binds").arg(opts.join("Bindings")).assert().code(3).get_output().stderr.clone();
     let err = String::from_utf8(err).unwrap();
     assert!(err.contains("pass --facts"), "{err}");
+    // Also with no Bindings dir and LOCALAPPDATA unset (Codex check 2).
+    let err = bin().env_remove("LOCALAPPDATA").arg("check-binds").assert().code(3).get_output().stderr.clone();
+    let err = String::from_utf8(err).unwrap();
+    assert!(err.contains("pass --facts"), "{err}");
 }
 
 // ---- Criterion 4: restore-preset ------------------------------------------

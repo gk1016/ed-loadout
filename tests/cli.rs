@@ -601,3 +601,66 @@ fn v01_c3_binds_commands_and_apply_default_too() {
     assert!(opts.join("_loadout-backup").is_dir());
     assert!(fs::read_to_string(opts.join("Graphics/DisplaySettings.xml")).unwrap().contains("<MaxFramesPerSecond>120<"));
 }
+
+// ---- v0.2 (claude/plans/2026-11-22-loadout-v0.2.md) -----------------------
+
+fn facts_file(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/facts").join(name)
+}
+
+fn detect(name: &str) -> String {
+    stdout_of(bin().arg("detect").arg("--facts").arg(facts_file(name)), 0)
+}
+
+#[test]
+fn v02_c1_detect_devmachine02_is_t1() {
+    let out = detect("devmachine02.toml");
+    assert!(out.contains("panel: 5120x1440 @ 120 Hz\n"), "{out}");
+    assert!(out.contains("devices: 231D0126, 231D0127, 231D2204, 045E0B22\n"), "{out}");
+    assert!(out.contains("tier: T1\n"), "{out}");
+    for line in ["ssaa = 1.5  (T1 budget 16.6 Mpx over 5120x1440;", "terrain_quality = 4  (", "override_tier = t1  (", "max_fps = 120  ("] {
+        assert!(out.contains(&format!("derived {line}")), "{line}\n{out}");
+    }
+}
+
+#[test]
+fn v02_c1_detect_laptop_5090m_is_t2_clamped() {
+    let out = detect("laptop-5090m.toml");
+    assert!(out.contains("tier: T2\n"), "{out}");
+    assert!(out.contains("derived ssaa = 1.5  (T2 budget 10.0 Mpx over 2560x1600, 1.55 clamped to 1.5;"), "{out}");
+    assert!(out.contains("derived terrain_quality = 3  ("), "{out}");
+    assert!(out.contains("derived override_tier = t2  ("), "{out}");
+    assert!(out.contains("derived max_fps = 240  ("), "{out}");
+}
+
+#[test]
+fn v02_c1_detect_t2_4k_and_unknown() {
+    let out = detect("t2-4k.toml");
+    assert!(out.contains("derived ssaa = 1.1  (T2 budget 10.0 Mpx over 3840x2160; starting point: raise while GPU use stays under ~85%)\n"), "{out}");
+    let out = detect("unknown.toml");
+    assert!(out.contains("tier: T3\n"), "{out}");
+    assert!(out.contains("derived ssaa = 1.0  ("), "{out}");
+    assert!(out.contains("derived override_tier = none  ("), "{out}");
+}
+
+#[test]
+fn v02_c1_detect_dump_writes_toml_that_loads_back() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dump = tmp.path().join("facts.toml");
+    let first = stdout_of(bin().arg("detect").arg("--facts").arg(facts_file("devmachine02.toml")).arg("--dump").arg(&dump), 0);
+    let t: toml::Table = fs::read_to_string(&dump).unwrap().parse().unwrap();
+    assert_eq!(t["gpu_name"].as_str(), Some("NVIDIA GeForce RTX 5090"));
+    assert_eq!(t["gpu_vram_mb"].as_integer(), Some(32607));
+    let again = stdout_of(bin().arg("detect").arg("--facts").arg(&dump), 0);
+    assert_eq!(first.lines().filter(|l| !l.starts_with("wrote ")).collect::<Vec<_>>(), again.lines().collect::<Vec<_>>());
+    // Never over an existing file.
+    bin().arg("detect").arg("--facts").arg(facts_file("devmachine02.toml")).arg("--dump").arg(&dump).assert().code(3);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn v02_c1_detect_without_facts_off_windows_exits_3_naming_the_flag() {
+    let err = bin().arg("detect").assert().code(3).get_output().stderr.clone();
+    let err = String::from_utf8(err).unwrap();
+    assert!(err.contains("--facts"), "{err}");
+}

@@ -1,0 +1,8 @@
+# Device facts for tests (plan claude/plans/2026-11-22-loadout-v0.2.md).
+hostname = "fieldlaptop"
+screen_w = 2560
+screen_h = 1600
+refresh_hz = 240
+gpu_name = "NVIDIA GeForce RTX 5090 Laptop GPU"
+gpu_vram_mb = 24576
+devices = ["231D0126", "231D0127", "045E0B22"]

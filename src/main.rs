@@ -8,6 +8,8 @@ mod binds;
 mod bundle;
 mod capture;
 mod diff;
+mod facts;
+mod tiers;
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
@@ -79,6 +81,16 @@ enum Cmd {
         #[arg(long)]
         machine: String,
     },
+    /// Print the panel, GPU and connected devices, and the values derived
+    /// from them. Windows detects; elsewhere pass --facts.
+    Detect {
+        /// Facts TOML to use instead of detecting.
+        #[arg(long)]
+        facts: Option<PathBuf>,
+        /// Write the facts as TOML to this new file.
+        #[arg(long)]
+        dump: Option<PathBuf>,
+    },
 }
 
 /// The dir given on the command line, else `$LOCALAPPDATA/Frontier
@@ -118,6 +130,7 @@ fn main() -> ExitCode {
         Cmd::Apply { profile, options, machine } => {
             default_dir(options, None).and_then(|o| apply::run(&profile, &o, &machine))
         }
+        Cmd::Detect { facts, dump } => facts::run_detect(facts.as_deref(), dump.as_deref()),
     };
     match result {
         Ok(code) => ExitCode::from(code as u8),

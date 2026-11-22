@@ -253,10 +253,19 @@ fn c3_resolution_falls_back_to_newest_custom_binds() {
     assert!(out.contains("Custom.4.2.binds (from --binds)"), "{out}");
 }
 
+/// v0.2 criterion 4: without --devices or --from-log the devices come from
+/// facts; off Windows with no --facts that is exit 3 naming the flag.
+#[cfg(not(windows))]
 #[test]
 fn c3_requires_devices_or_from_log() {
     let (_tmp, opts) = fixture_copy();
-    bin().arg("check-binds").arg(opts.join("Bindings")).assert().code(2);
+    let err = bin().arg("check-binds").arg(opts.join("Bindings")).assert().code(3).get_output().stderr.clone();
+    let err = String::from_utf8(err).unwrap();
+    assert!(err.contains("pass --facts"), "{err}");
+    // Also with no Bindings dir and LOCALAPPDATA unset (Codex check 2).
+    let err = bin().env_remove("LOCALAPPDATA").arg("check-binds").assert().code(3).get_output().stderr.clone();
+    let err = String::from_utf8(err).unwrap();
+    assert!(err.contains("pass --facts"), "{err}");
 }
 
 // ---- Criterion 4: restore-preset ------------------------------------------
@@ -485,8 +494,8 @@ fn v01_c2_apply_ssaa_refuses_when_target_has_a_newer_fxcfg() {
 }
 
 #[test]
-fn v01_c4_version_is_0_1_1() {
-    bin().arg("--version").assert().success().stdout("ed-loadout 0.1.1\n");
+fn v02_c6_version_is_0_2_0() {
+    bin().arg("--version").assert().success().stdout("ed-loadout 0.2.0\n");
 }
 
 /// `<base>/Frontier Developments/Elite Dangerous/Options`, with the
@@ -600,4 +609,336 @@ fn v01_c3_binds_commands_and_apply_default_too() {
         .success();
     assert!(opts.join("_loadout-backup").is_dir());
     assert!(fs::read_to_string(opts.join("Graphics/DisplaySettings.xml")).unwrap().contains("<MaxFramesPerSecond>120<"));
+}
+
+// ---- v0.2 (claude/plans/2026-11-22-loadout-v0.2.md) -----------------------
+
+fn facts_file(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/facts").join(name)
+}
+
+fn detect(name: &str) -> String {
+    stdout_of(bin().arg("detect").arg("--facts").arg(facts_file(name)), 0)
+}
+
+#[test]
+fn v02_c1_detect_devmachine02_is_t1() {
+    let out = detect("devmachine02.toml");
+    assert!(out.contains("panel: 5120x1440 @ 120 Hz\n"), "{out}");
+    assert!(out.contains("devices: 231D0126, 231D0127, 231D2204, 045E0B22\n"), "{out}");
+    assert!(out.contains("tier: T1\n"), "{out}");
+    for line in ["ssaa = 1.5  (T1 budget 16.6 Mpx over 5120x1440;", "terrain_quality = 4  (", "override_tier = t1  (", "max_fps = 120  ("] {
+        assert!(out.contains(&format!("derived {line}")), "{line}\n{out}");
+    }
+}
+
+#[test]
+fn v02_c1_detect_laptop_5090m_is_t2_clamped() {
+    let out = detect("laptop-5090m.toml");
+    assert!(out.contains("tier: T2\n"), "{out}");
+    assert!(out.contains("derived ssaa = 1.5  (T2 budget 10.0 Mpx over 2560x1600, 1.55 clamped to 1.5;"), "{out}");
+    assert!(out.contains("derived terrain_quality = 3  ("), "{out}");
+    assert!(out.contains("derived override_tier = t2  ("), "{out}");
+    assert!(out.contains("derived max_fps = 240  ("), "{out}");
+}
+
+#[test]
+fn v02_c1_detect_t2_4k_and_unknown() {
+    let out = detect("t2-4k.toml");
+    assert!(out.contains("derived ssaa = 1.1  (T2 budget 10.0 Mpx over 3840x2160; starting point: raise while GPU use stays under ~85%)\n"), "{out}");
+    let out = detect("unknown.toml");
+    assert!(out.contains("tier: T3\n"), "{out}");
+    assert!(out.contains("derived ssaa = 1.0  ("), "{out}");
+    assert!(out.contains("derived override_tier = none  ("), "{out}");
+}
+
+#[test]
+fn v02_c1_detect_dump_writes_toml_that_loads_back() {
+    let tmp = tempfile::tempdir().unwrap();
+    let dump = tmp.path().join("facts.toml");
+    let first = stdout_of(bin().arg("detect").arg("--facts").arg(facts_file("devmachine02.toml")).arg("--dump").arg(&dump), 0);
+    let t: toml::Table = fs::read_to_string(&dump).unwrap().parse().unwrap();
+    assert_eq!(t["gpu_name"].as_str(), Some("NVIDIA GeForce RTX 5090"));
+    assert_eq!(t["gpu_vram_mb"].as_integer(), Some(32607));
+    let again = stdout_of(bin().arg("detect").arg("--facts").arg(&dump), 0);
+    assert_eq!(first.lines().filter(|l| !l.starts_with("wrote ")).collect::<Vec<_>>(), again.lines().collect::<Vec<_>>());
+    // Never over an existing file.
+    bin().arg("detect").arg("--facts").arg(facts_file("devmachine02.toml")).arg("--dump").arg(&dump).assert().code(3);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn v02_c1_detect_without_facts_off_windows_exits_3_naming_the_flag() {
+    let err = bin().arg("detect").assert().code(3).get_output().stderr.clone();
+    let err = String::from_utf8(err).unwrap();
+    assert!(err.contains("--facts"), "{err}");
+}
+
+fn tier_xml(name: &str) -> Vec<u8> {
+    fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tiers").join(name)).unwrap()
+}
+
+/// `apply <profile> --options <target> --facts <facts>` plus `extra` args; (code, stdout, stderr).
+fn apply_with_facts(profile: &Path, target: &Path, facts: &Path, extra: &[&str]) -> (i32, String, String) {
+    let out = bin()
+        .arg("apply")
+        .arg(profile)
+        .arg("--options")
+        .arg(target)
+        .arg("--facts")
+        .arg(facts)
+        .args(extra)
+        .output()
+        .unwrap();
+    (out.status.code().unwrap(), String::from_utf8(out.stdout).unwrap(), String::from_utf8(out.stderr).unwrap())
+}
+
+#[test]
+fn v02_c2_apply_laptop_facts_derives_everything() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "");
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+    let (code, out, err) = apply_with_facts(&profile, &target, &facts_file("laptop-5090m.toml"), &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("note: no [machine.fieldlaptop] in profile.toml; using the derived values\n"), "{out}");
+    assert!(out.contains("fxcfg target: Graphics/Custom.4.4.fxcfg\n"), "{out}");
+    for line in ["ssaa = 1.5", "terrain_quality = 3", "override_tier = t2", "screen_width = 2560", "max_fps = 240"] {
+        assert!(out.contains(&format!("effective {line}  (derived)\n")), "{line}\n{out}");
+    }
+
+    let fx = "Graphics/Custom.4.4.fxcfg";
+    let ds = "Graphics/DisplaySettings.xml";
+    assert_eq!(
+        changed_lines(&fs::read(fixture().join(fx)).unwrap(), &fs::read(target.join(fx)).unwrap()),
+        vec![(24, "\t<TerrainQuality>4</TerrainQuality>".into(), "\t<TerrainQuality>3</TerrainQuality>".into())]
+    );
+    let ds_text = fs::read_to_string(target.join(ds)).unwrap();
+    for e in [
+        "<ScreenWidth>2560</ScreenWidth>",
+        "<ScreenHeight>1600</ScreenHeight>",
+        "<DX11_RefreshRateNumerator>240</DX11_RefreshRateNumerator>",
+        "<DX11_RefreshRateDenominator>1</DX11_RefreshRateDenominator>",
+        "<MaxFramesPerSecond>240</MaxFramesPerSecond>",
+        "<LimitFrameRate>true</LimitFrameRate>",
+    ] {
+        assert!(ds_text.contains(e), "{e}\n{ds_text}");
+    }
+    assert!(fs::read_to_string(target.join(fx)).unwrap().contains("<SSAAMultiplier>1.500000</SSAAMultiplier>"));
+    let ov = "Graphics/GraphicsConfigurationOverride.xml";
+    assert_eq!(fs::read(target.join(ov)).unwrap(), tier_xml("t2.xml"));
+
+    let stamps: Vec<PathBuf> = fs::read_dir(target.join("_loadout-backup")).unwrap().map(|e| e.unwrap().path()).collect();
+    assert_eq!(stamps.len(), 1, "{stamps:?}");
+    for rel in [fx, ds, ov] {
+        assert_eq!(fs::read(stamps[0].join(rel)).unwrap(), fs::read(fixture().join(rel)).unwrap(), "{rel}");
+    }
+}
+
+#[test]
+fn v02_c2_machine_section_overrides_key_by_key() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "\n[machine.fieldlaptop]\nssaa = 1.25\n");
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+    let (code, out, err) = apply_with_facts(&profile, &target, &facts_file("laptop-5090m.toml"), &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("derived ssaa = 1.5  ("), "{out}");
+    assert!(out.contains("effective ssaa = 1.25  ([machine.fieldlaptop])\n"), "{out}");
+    assert!(out.contains("effective terrain_quality = 3  (derived)\n"), "{out}");
+    assert!(out.contains("effective max_fps = 240  (derived)\n"), "{out}");
+    let fx = fs::read_to_string(target.join("Graphics/Custom.4.4.fxcfg")).unwrap();
+    assert!(fx.contains("<SSAAMultiplier>1.250000</SSAAMultiplier>"), "{fx}");
+    assert!(fx.contains("<TerrainQuality>3</TerrainQuality>"), "{fx}");
+    assert_eq!(fs::read(target.join("Graphics/GraphicsConfigurationOverride.xml")).unwrap(), tier_xml("t2.xml"));
+    // --machine names a different section; the facts' hostname is not used then.
+    let (code, out, _) = apply_with_facts(&profile, &target, &facts_file("laptop-5090m.toml"), &["--machine", "other"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("effective ssaa = 1.5  (derived)\n"), "{out}");
+}
+
+#[test]
+fn v02_c2_t1_facts_write_t1_xml_identical_to_the_fixture() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "");
+    let target = tmp.path().join("Target");
+    fs::create_dir_all(&target).unwrap();
+    let (code, out, err) = apply_with_facts(&profile, &target, &facts_file("devmachine02.toml"), &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    let ov = "Graphics/GraphicsConfigurationOverride.xml";
+    assert_eq!(tier_xml("t1.xml"), fs::read(fixture().join(ov)).unwrap());
+    assert_eq!(fs::read(target.join(ov)).unwrap(), tier_xml("t1.xml"));
+}
+
+#[test]
+fn v02_c2_unknown_gpu_leaves_the_target_override_alone() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "");
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+    let ov = target.join("Graphics/GraphicsConfigurationOverride.xml");
+    let theirs = b"<GraphicsConfig>\r\n</GraphicsConfig>\r\n";
+    fs::write(&ov, theirs).unwrap();
+    let (code, out, err) = apply_with_facts(&profile, &target, &facts_file("unknown.toml"), &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("override_tier none: Graphics/GraphicsConfigurationOverride.xml in the Options dir is left alone\n"), "{out}");
+    assert!(!out.contains("wrote Graphics/GraphicsConfigurationOverride.xml"), "{out}");
+    assert_eq!(fs::read(&ov).unwrap(), theirs);
+    assert!(fs::read_to_string(target.join("Graphics/Custom.4.4.fxcfg")).unwrap().contains("<SSAAMultiplier>1.000000<"));
+}
+
+/// Off Windows only: on Windows, no --facts means the real hardware is
+/// detected and derived values apply (Codex check 3).
+#[cfg(not(windows))]
+#[test]
+fn v02_c2_no_facts_no_machine_applies_as_captured() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "");
+    let target = tmp.path().join("Target");
+    fs::create_dir_all(&target).unwrap();
+    let out = bin().arg("apply").arg(&profile).arg("--options").arg(&target).output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("applying the profile as captured"), "{stdout}");
+    assert!(!stdout.contains("effective "), "{stdout}");
+    for rel in [
+        "Graphics/Custom.4.4.fxcfg",
+        "Graphics/DisplaySettings.xml",
+        "Graphics/GraphicsConfigurationOverride.xml",
+        "Bindings/Custom.4.2.binds",
+    ] {
+        assert_eq!(fs::read(target.join(rel)).unwrap(), fs::read(fixture().join(rel)).unwrap(), "{rel}");
+    }
+}
+
+#[test]
+fn v02_c3_terrain_quality_only_targets_the_fxcfg_and_refuses_a_newer_one() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "\n[machine.laptop]\nterrain_quality = 3\noverride_tier = \"captured\"\n");
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+    let out = stdout_of(bin().arg("apply").arg(&profile).arg("--options").arg(&target).args(["--machine", "laptop"]), 0);
+    assert!(out.contains("fxcfg target: Graphics/Custom.4.4.fxcfg\n"), "{out}");
+    assert!(!out.contains("ssaa target:"), "{out}");
+    assert!(out.contains("effective terrain_quality = 3  ([machine.laptop])\n"), "{out}");
+    assert!(out.contains("effective override_tier = captured  ([machine.laptop])\n"), "{out}");
+    let fx44 = fs::read(fixture().join("Graphics/Custom.4.4.fxcfg")).unwrap();
+    assert_eq!(
+        changed_lines(&fx44, &fs::read(target.join("Graphics/Custom.4.4.fxcfg")).unwrap()),
+        vec![(24, "\t<TerrainQuality>4</TerrainQuality>".into(), "\t<TerrainQuality>3</TerrainQuality>".into())]
+    );
+
+    let target = tmp.path().join("Newer");
+    copy_tree(&fixture(), &target);
+    fs::write(target.join("Graphics/Custom.4.5.fxcfg"), &fx44).unwrap();
+    let err = bin()
+        .arg("apply")
+        .arg(&profile)
+        .arg("--options")
+        .arg(&target)
+        .args(["--machine", "laptop"])
+        .assert()
+        .code(3)
+        .get_output()
+        .stderr
+        .clone();
+    let err = String::from_utf8(err).unwrap();
+    assert!(err.contains("Graphics/Custom.4.5.fxcfg, newer than the profile's Graphics/Custom.4.4.fxcfg"), "{err}");
+    assert!(!target.join("_loadout-backup").exists());
+    assert_eq!(fs::read(target.join("Graphics/Custom.4.4.fxcfg")).unwrap(), fx44);
+}
+
+#[test]
+fn v02_c3_unknown_machine_key_still_rejected() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "\n[machine.laptop]\nterrain = 3\n");
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+    let err = bin().arg("apply").arg(&profile).arg("--options").arg(&target).args(["--machine", "laptop"]).assert().code(3).get_output().stderr.clone();
+    assert!(String::from_utf8(err).unwrap().contains("[machine.laptop] terrain: unknown override"));
+    assert!(!target.join("_loadout-backup").exists());
+}
+
+/// `devmachine02.toml` without 045E0B22, written into `dir`.
+fn facts_without_pad(dir: &Path) -> PathBuf {
+    let text = fs::read_to_string(facts_file("devmachine02.toml")).unwrap().replace(", \"045E0B22\"", "");
+    assert!(!text.contains("045E0B22"));
+    let p = dir.join("no-pad.toml");
+    fs::write(&p, text).unwrap();
+    p
+}
+
+#[test]
+fn v02_c4_check_binds_takes_devices_from_facts() {
+    let (tmp, opts) = fixture_copy();
+    let b = opts.join("Bindings");
+    let out = stdout_of(bin().arg("check-binds").arg(&b).arg("--facts").arg(facts_file("devmachine02.toml")), 0);
+    assert!(out.contains("devices: 231D0126,231D0127,231D2204,045E0B22 (from device facts)\n"), "{out}");
+    let out = stdout_of(bin().arg("check-binds").arg(&b).arg("--facts").arg(facts_without_pad(tmp.path())), 1);
+    assert!(out.contains("missing device: 045E0B22 (3 bindings)\n"), "{out}");
+    // --devices and --facts together is a usage error.
+    bin().arg("check-binds").arg(&b).args(["--devices", ""]).arg("--facts").arg(facts_file("devmachine02.toml")).assert().code(2);
+}
+
+#[test]
+fn v02_c4_apply_warns_for_an_unconnected_bound_device_and_writes() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "");
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+    let (code, out, err) = apply_with_facts(&profile, &target, &facts_without_pad(tmp.path()), &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("binds check: Bindings/Custom.4.2.binds against 3 connected device(s)\n"), "{out}");
+    assert!(out.contains("warning: bound device 045E0B22 (3 bindings) is not connected\n"), "{out}");
+    assert_eq!(out.matches("is not connected").count(), 1, "{out}");
+    assert!(out.contains("wrote Bindings/Custom.4.2.binds\n"), "{out}");
+    assert!(target.join("_loadout-backup").is_dir());
+}
+
+#[test]
+fn v02_c4_strict_binds_refuses_and_writes_nothing() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "");
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+    let (code, out, err) = apply_with_facts(&profile, &target, &facts_without_pad(tmp.path()), &["--strict-binds"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(out.contains("warning: bound device 045E0B22 (3 bindings) is not connected\n"), "{out}");
+    assert!(err.contains("refusing: --strict-binds"), "{err}");
+    assert!(!out.contains("wrote "), "{out}");
+    assert!(!target.join("_loadout-backup").exists());
+    assert_eq!(
+        fs::read(target.join("Graphics/DisplaySettings.xml")).unwrap(),
+        fs::read(fixture().join("Graphics/DisplaySettings.xml")).unwrap()
+    );
+    // Every bound device connected: strict passes.
+    let (code, _, _) = apply_with_facts(&profile, &target, &facts_file("devmachine02.toml"), &["--strict-binds"]);
+    assert_eq!(code, 0);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn v02_c4_strict_binds_without_facts_exits_3_writing_nothing() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "");
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+    let out = bin().arg("apply").arg(&profile).arg("--options").arg(&target).arg("--strict-binds").output().unwrap();
+    assert_eq!(out.status.code(), Some(3));
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert!(err.contains("--strict-binds needs device facts") && err.contains("pass --facts"), "{err}");
+    assert!(!target.join("_loadout-backup").exists());
+}
+
+#[cfg(not(windows))]
+#[test]
+fn v02_c4_apply_without_facts_skips_the_binds_check() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "");
+    let target = tmp.path().join("Target");
+    fs::create_dir_all(&target).unwrap();
+    let out = bin().arg("apply").arg(&profile).arg("--options").arg(&target).output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert_eq!(err.matches("binds check skipped (no device facts)").count(), 1, "{err}");
 }

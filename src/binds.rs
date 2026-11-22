@@ -75,6 +75,17 @@ pub fn bound_devices(binds: &str) -> BTreeMap<String, usize> {
     out
 }
 
+/// The `Bindings/Custom.4.<n>.binds` with the highest numeric `<n>`.
+pub fn highest_custom4<'a>(rels: impl Iterator<Item = &'a String>) -> Option<&'a String> {
+    rels.filter_map(|rel| {
+        let n = rel.strip_prefix("Bindings/Custom.4.")?.strip_suffix(".binds")?;
+        (!n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())).then(|| (n.parse::<u64>().ok(), rel))
+    })
+    .filter_map(|(n, rel)| Some((n?, rel)))
+    .max_by_key(|(n, _)| *n)
+    .map(|(_, rel)| rel)
+}
+
 /// Unique GUIDs from `Failed to find GUID for device: <GUID>` lines, in order.
 pub fn missing_from_log(log: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -194,5 +205,14 @@ mod tests {
         assert_eq!(log_preset_name("nothing here"), None);
         let log = "Failed to find GUID for device: 045E0B22\r\nFailed to find GUID for device: 045E0B22\nFailed to find GUID for device: ABCD0001\n";
         assert_eq!(missing_from_log(log), vec!["045E0B22", "ABCD0001"]);
+    }
+
+    #[test]
+    fn highest_custom4_is_numeric() {
+        let rels: Vec<String> = ["Bindings/Custom.4.2.binds", "Bindings/Custom.4.10.binds", "Bindings/Custom.4.x.binds", "Bindings/Custom.3.99.binds", "Graphics/Custom.4.4.fxcfg"]
+            .map(String::from)
+            .into();
+        assert_eq!(highest_custom4(rels.iter()).map(String::as_str), Some("Bindings/Custom.4.10.binds"));
+        assert_eq!(highest_custom4(rels[2..].iter()), None);
     }
 }

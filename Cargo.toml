@@ -1,6 +1,6 @@
 [package]
 name = "ed-loadout"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
@@ -11,6 +11,9 @@ sha2 = "0.10"
 similar = "2"
 toml = "0.8"
 walkdir = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_Input"] }
 
 [dev-dependencies]
 assert_cmd = "2"

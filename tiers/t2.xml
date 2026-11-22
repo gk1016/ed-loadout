@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Beyond-Ultra override. Built 2026-09-18 against the installed
+  elite-dangerous-odyssey-64\GraphicsConfiguration.xml (4.4-era schema).
+  Every tag below exists in that base file. The override can only MODIFY
+  existing values, it cannot add elements, so nothing here adds any.
+
+  Applies only when the matching in-game tier is selected:
+    Environment = Ultra, Galaxy Map = High, Reflections (Envmap) = High,
+    Directional Shadows = Ultra, Spot Shadows = Ultra.
+
+  Revert: delete this file. The game regenerates an empty one.
+-->
+<GraphicsConfig>
+
+	<!-- PROVEN. Stock Ultra 2560 / 328. Do not exceed 4096: texture pop-in
+	     around starports gets worse regardless of VRAM. -->
+	<Planets>
+		<Ultra>
+			<TextureSize>4096</TextureSize>
+			<WorkPerFrame>512</WorkPerFrame>
+			<!-- ROUND 2, EXPERIMENTAL. Stock 6 / 100. Units of the pool
+			     budget are unknown; pull both if planets hitch or VRAM
+			     balloons on approach. -->
+			<AtmosphereSteps>8</AtmosphereSteps>
+			<TexturePoolBudget>200</TexturePoolBudget>
+		</Ultra>
+	</Planets>
+
+	<!-- PROVEN. Stock 2048. Above 4096 shows no visible gain, only longer
+	     hyperspace bakes. -->
+	<GalaxyBackground>
+		<High>
+			<TextureSize>4096</TextureSize>
+		</High>
+	</GalaxyBackground>
+
+	<!-- PROVEN. Stock 256 / 8. Reflection cube map; NumMips = log2(size). -->
+	<Envmap>
+		<High>
+			<TextureSize>1024</TextureSize>
+			<NumMips>10</NumMips>
+		</High>
+	</Envmap>
+
+	<!-- StarInstanceCount carried over unchanged from your current file.
+	     High tier: nebula counts/resolution and Milky Way density raised.
+	     Cost lands on the skybox bake during hyperspace, not on frame rate.
+	     If jumps near dense nebula regions hitch or hang, back off
+	     HighResNebulasCount and HighResNebulaDimensions first.
+	     Stock High: 30 / 40 / 16 / 1 / 64 / 256 / 35 / 138 / 16000 / 4000 -->
+	<GalaxyMap>
+		<Low>
+			<StarInstanceCount>180000</StarInstanceCount>
+		</Low>
+		<Medium>
+			<StarInstanceCount>180000</StarInstanceCount>
+		</Medium>
+		<High>
+			<NebulasCount>100</NebulasCount>
+			<NebulasInBackgroundCount>100</NebulasInBackgroundCount>
+			<LowResNebulasCount>32</LowResNebulasCount>
+			<HighResNebulasCount>8</HighResNebulasCount>
+			<LowResNebulaDimensions>128</LowResNebulaDimensions>
+			<HighResNebulaDimensions>512</HighResNebulaDimensions>
+			<LowResSamplesCount>64</LowResSamplesCount>
+			<HighResSamplesCount>256</HighResSamplesCount>
+			<MilkyWayInstancesCount>32768</MilkyWayInstancesCount>
+			<StarInstanceCount>180000</StarInstanceCount>
+		</High>
+	</GalaxyMap>
+
+	<!-- ROUND 2, EXPERIMENTAL. Terrain material blend targets, stock 1024.
+	     Set on both top tiers so it applies whether Terrain Quality is
+	     Ultra or Ultra for Capture. -->
+	<Terrain>
+		<Ultra>
+			<BlendTargetsResolution>2048</BlendTargetsResolution>
+		</Ultra>
+		<UltraPlus>
+			<BlendTargetsResolution>2048</BlendTargetsResolution>
+		</UltraPlus>
+	</Terrain>
+
+</GraphicsConfig>

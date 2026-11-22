@@ -1,13 +1,19 @@
 //! `apply`: back up, write the profile files, apply `[machine.<name>]`
 //! overrides by replacing element text in place. Never inserts an element.
 
+use crate::binds;
 use crate::bundle::{backup_stamp, join_rel, scan_profile};
+use crate::facts::{self, Facts};
+use crate::tiers::{self, OverrideTier, fmt_ssaa};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
 const DISPLAY: &str = "Graphics/DisplaySettings.xml";
 const PROCESS: &str = "EliteDangerous64.exe";
+const OVERRIDE_XML: &str = "Graphics/GraphicsConfigurationOverride.xml";
+const T1_XML: &[u8] = include_bytes!("../tiers/t1.xml");
+const T2_XML: &[u8] = include_bytes!("../tiers/t2.xml");
 
 /// True when Elite Dangerous is running. Windows only; elsewhere prints a
 /// notice and returns false.
@@ -34,23 +40,43 @@ pub fn game_running() -> bool {
     false
 }
 
-pub fn run(profile: &Path, options: &Path, machine: &str) -> Result<i32, String> {
-    run_with(profile, options, machine, game_running())
+pub fn run(
+    profile: &Path,
+    options: &Path,
+    machine: Option<&str>,
+    facts_file: Option<&Path>,
+    strict_binds: bool,
+) -> Result<i32, String> {
+    run_with(profile, options, machine, facts_file, strict_binds, game_running())
 }
 
 /// `running` is injected so the refusal path is testable off Windows.
-pub fn run_with(profile: &Path, options: &Path, machine: &str, running: bool) -> Result<i32, String> {
+pub fn run_with(
+    profile: &Path,
+    options: &Path,
+    machine: Option<&str>,
+    facts_file: Option<&Path>,
+    strict_binds: bool,
+    running: bool,
+) -> Result<i32, String> {
     if running {
         eprintln!("refusing: {PROCESS} is running; quit the game and apply again");
         return Ok(2);
     }
 
+    let facts = facts::load(facts_file)?;
+    if facts.is_none() {
+        eprintln!("notice: {}", facts::NO_FACTS);
+        if strict_binds {
+            return Err(format!("--strict-binds needs device facts; {}", facts::NO_FACTS));
+        }
+    }
     let toml_path = profile.join("profile.toml");
     let table: toml::Table = fs::read_to_string(&toml_path)
         .map_err(|e| format!("{}: {e}", toml_path.display()))?
         .parse()
         .map_err(|e| format!("{}: {e}", toml_path.display()))?;
-    let overrides = machine_overrides(&table, machine)?;
+    let overrides = effective_overrides(&table, machine, facts.as_ref())?;
 
     // Final contents of every file, overrides applied, before anything is
     // written: a missing element aborts with the options dir untouched.
@@ -60,8 +86,31 @@ pub fn run_with(profile: &Path, options: &Path, machine: &str, running: bool) ->
         let bytes = fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?;
         files.insert(rel, bytes);
     }
+    let unconnected = match &facts {
+        Some(f) => binds_check(&files, &f.devices),
+        None => {
+            eprintln!("binds check skipped (no device facts)");
+            0
+        }
+    };
+    if strict_binds && unconnected > 0 {
+        eprintln!("refusing: --strict-binds and {unconnected} bound device(s) not connected; nothing written");
+        return Ok(1);
+    }
+    match overrides.override_tier.unwrap_or(OverrideTier::Captured) {
+        OverrideTier::Captured => {}
+        OverrideTier::None => {
+            files.remove(OVERRIDE_XML);
+            println!("override_tier none: {OVERRIDE_XML} in the Options dir is left alone");
+        }
+        t => {
+            let bytes = if t == OverrideTier::T1 { T1_XML } else { T2_XML };
+            files.insert(OVERRIDE_XML.to_owned(), bytes.to_vec());
+            println!("override_tier {}: writing tiers/{}.xml as {OVERRIDE_XML}", t.as_str(), t.as_str());
+        }
+    }
     for (rel, tag, value) in edits(&files, &overrides)? {
-        if tag == "SSAAMultiplier" {
+        if tag == "SSAAMultiplier" || tag == "TerrainQuality" {
             refuse_newer_fxcfg(options, &rel)?;
         }
         let bytes = files.get_mut(&rel).expect("edit targets a profile file");
@@ -100,6 +149,27 @@ pub fn run_with(profile: &Path, options: &Path, machine: &str, running: bool) ->
     Ok(0)
 }
 
+/// Warn for every device bound in the profile's highest
+/// `Bindings/Custom.4.<n>.binds` (the file about to be written) that is not in
+/// `devices`. Returns how many.
+fn binds_check(files: &BTreeMap<String, Vec<u8>>, devices: &[String]) -> usize {
+    let Some(rel) = binds::highest_custom4(files.keys()) else {
+        println!("binds check skipped (profile has no Bindings/Custom.4.<n>.binds)");
+        return 0;
+    };
+    println!("binds check: {rel} against {} connected device(s)", devices.len());
+    let bound = binds::bound_devices(&String::from_utf8_lossy(&files[rel]));
+    let mut n = 0;
+    for (guid, count) in &bound {
+        if !devices.iter().any(|d| d.eq_ignore_ascii_case(guid)) {
+            let plural = if *count == 1 { "binding" } else { "bindings" };
+            println!("warning: bound device {guid} ({count} {plural}) is not connected");
+            n += 1;
+        }
+    }
+    n
+}
+
 #[derive(Debug, Default, PartialEq)]
 struct Overrides {
     ssaa: Option<f64>,
@@ -107,16 +177,83 @@ struct Overrides {
     screen_height: Option<i64>,
     refresh_hz: Option<i64>,
     max_fps: Option<i64>,
+    terrain_quality: Option<i64>,
+    override_tier: Option<OverrideTier>,
 }
 
-fn machine_overrides(table: &toml::Table, machine: &str) -> Result<Overrides, String> {
+impl Overrides {
+    /// (key, value) for every key that is set, in `[machine]` key names.
+    fn entries(&self) -> Vec<(&'static str, String)> {
+        let mut out = Vec::new();
+        let ints = [
+            ("screen_width", self.screen_width),
+            ("screen_height", self.screen_height),
+            ("refresh_hz", self.refresh_hz),
+            ("max_fps", self.max_fps),
+        ];
+        out.extend(ints.into_iter().filter_map(|(k, v)| v.map(|v| (k, v.to_string()))));
+        out.extend(self.ssaa.map(|v| ("ssaa", fmt_ssaa(v))));
+        out.extend(self.terrain_quality.map(|v| ("terrain_quality", v.to_string())));
+        out.extend(self.override_tier.map(|v| ("override_tier", v.as_str().to_owned())));
+        out
+    }
+}
+
+/// Derived values from the facts (if any), then `[machine.<name>]` (name =
+/// `--machine`, else the facts' hostname) key by key on top. Every effective
+/// key is printed with its source.
+fn effective_overrides(table: &toml::Table, machine: Option<&str>, facts: Option<&Facts>) -> Result<Overrides, String> {
+    let derived = facts.map(tiers::derive);
+    if let Some(d) = &derived {
+        d.print();
+    }
+    let name = machine.map(str::to_owned).or_else(|| facts.map(|f| f.hostname.clone()));
+    let user = match &name {
+        Some(n) => machine_overrides(table, n)?,
+        None => None,
+    };
+    let as_captured = if derived.is_some() { "using the derived values" } else { "applying the profile as captured" };
+    match &name {
+        Some(n) if user.is_none() => println!("note: no [machine.{n}] in profile.toml; {as_captured}"),
+        None => println!("note: no --machine and no device facts; {as_captured}"),
+        _ => {}
+    }
+    let d = derived.map(|d| Overrides {
+        ssaa: Some(d.ssaa),
+        screen_width: Some(d.screen_width),
+        screen_height: Some(d.screen_height),
+        refresh_hz: Some(d.refresh_hz),
+        max_fps: Some(d.max_fps),
+        terrain_quality: Some(d.terrain_quality),
+        override_tier: Some(d.override_tier),
+    });
+    let (d, u) = (d.unwrap_or_default(), user.unwrap_or_default());
+    let o = Overrides {
+        ssaa: u.ssaa.or(d.ssaa),
+        screen_width: u.screen_width.or(d.screen_width),
+        screen_height: u.screen_height.or(d.screen_height),
+        refresh_hz: u.refresh_hz.or(d.refresh_hz),
+        max_fps: u.max_fps.or(d.max_fps),
+        terrain_quality: u.terrain_quality.or(d.terrain_quality),
+        override_tier: u.override_tier.or(d.override_tier),
+    };
+    let section = format!("[machine.{}]", name.unwrap_or_default());
+    let mine: Vec<&str> = u.entries().into_iter().map(|(k, _)| k).collect();
+    for (key, value) in o.entries() {
+        let source = if mine.contains(&key) { section.as_str() } else { "derived" };
+        println!("effective {key} = {value}  ({source})");
+    }
+    Ok(o)
+}
+
+/// The `[machine.<machine>]` keys, or `None` when there is no such section.
+fn machine_overrides(table: &toml::Table, machine: &str) -> Result<Option<Overrides>, String> {
     let Some(section) = table
         .get("machine")
         .and_then(|m| m.as_table())
         .and_then(|m| m.get(machine))
     else {
-        println!("note: no [machine.{machine}] in profile.toml; applying the profile as captured");
-        return Ok(Overrides::default());
+        return Ok(None);
     };
     let section = section
         .as_table()
@@ -140,16 +277,26 @@ fn machine_overrides(table: &toml::Table, machine: &str) -> Result<Overrides, St
             "screen_height" => o.screen_height = Some(positive_int()?),
             "refresh_hz" => o.refresh_hz = Some(positive_int()?),
             "max_fps" => o.max_fps = Some(positive_int()?),
+            "terrain_quality" => match value.as_integer() {
+                Some(n @ (3 | 4)) => o.terrain_quality = Some(n),
+                _ => return Err(format!("[machine.{machine}] terrain_quality: expected 3 or 4")),
+            },
+            "override_tier" => {
+                let t = value.as_str().and_then(OverrideTier::parse).ok_or_else(|| {
+                    format!("[machine.{machine}] override_tier: expected \"t1\", \"t2\", \"captured\" or \"none\"")
+                })?;
+                o.override_tier = Some(t);
+            }
             _ => return Err(format!("[machine.{machine}] {key}: unknown override")),
         }
     }
-    Ok(o)
+    Ok(Some(o))
 }
 
 /// (file, element, new text) for every override, per the plan's mapping.
 fn edits(files: &BTreeMap<String, Vec<u8>>, o: &Overrides) -> Result<Vec<(String, String, String)>, String> {
     let mut out = Vec::new();
-    if let Some(ssaa) = o.ssaa {
+    if o.ssaa.is_some() || o.terrain_quality.is_some() {
         // Elite reads the highest Custom.<Major>.<Minor>.fxcfg; old versions
         // left behind by updates are not touched.
         let mut best: Option<((u32, u32), &String)> = None;
@@ -168,11 +315,18 @@ fn edits(files: &BTreeMap<String, Vec<u8>>, o: &Overrides) -> Result<Vec<(String
                 best = Some((version, rel));
             }
         }
+        let key = if o.ssaa.is_some() { "ssaa" } else { "terrain_quality" };
         let Some((_, rel)) = best else {
-            return Err("ssaa: profile has no Graphics/Custom.<Major>.<Minor>.fxcfg".into());
+            return Err(format!("{key}: profile has no Graphics/Custom.<Major>.<Minor>.fxcfg"));
         };
-        println!("ssaa target: {rel}");
-        out.push((rel.clone(), "SSAAMultiplier".into(), format!("{ssaa:.6}")));
+        println!("fxcfg target: {rel}");
+        if let Some(ssaa) = o.ssaa {
+            println!("ssaa target: {rel}");
+            out.push((rel.clone(), "SSAAMultiplier".into(), format!("{ssaa:.6}")));
+        }
+        if let Some(tq) = o.terrain_quality {
+            out.push((rel.clone(), "TerrainQuality".into(), tq.to_string()));
+        }
     }
     let mut display = |tag: &str, value: String| out.push((DISPLAY.to_owned(), tag.to_owned(), value));
     if let Some(w) = o.screen_width {
@@ -198,7 +352,7 @@ fn edits(files: &BTreeMap<String, Vec<u8>>, o: &Overrides) -> Result<Vec<(String
 }
 
 /// Error when the Options dir already holds a `Custom.<Major>.<Minor>.fxcfg`
-/// newer than the profile's ssaa target: Elite would read that one, and the
+/// newer than the profile's fxcfg target: Elite would read that one, and the
 /// override would land in a file the game ignores.
 fn refuse_newer_fxcfg(options: &Path, target: &str) -> Result<(), String> {
     let Some(mine) = target.strip_prefix("Graphics/Custom.").and_then(fxcfg_version) else {
@@ -214,7 +368,7 @@ fn refuse_newer_fxcfg(options: &Path, target: &str) -> Result<(), String> {
             && entry.file_type().is_ok_and(|t| t.is_file())
         {
             return Err(format!(
-                "ssaa: {} has Graphics/{name}, newer than the profile's {target}; Elite reads the newer one. Capture from a machine on the same game version",
+                "fxcfg: {} has Graphics/{name}, newer than the profile's {target}; Elite reads the newer one. Capture from a machine on the same game version",
                 options.display()
             ));
         }
@@ -276,7 +430,7 @@ mod tests {
         let options = tmp.path().join("Options");
         fs::create_dir_all(&options).unwrap();
         // The profile does not even exist: refusal comes before any read.
-        let code = run_with(&tmp.path().join("nope"), &options, "laptop", true).unwrap();
+        let code = run_with(&tmp.path().join("nope"), &options, Some("laptop"), None, false, true).unwrap();
         assert_eq!(code, 2);
         assert_eq!(fs::read_dir(&options).unwrap().count(), 0);
     }
@@ -308,13 +462,20 @@ mod tests {
     #[test]
     fn overrides_parse_and_reject_unknown_keys() {
         let t: toml::Table = "[machine.laptop]\nssaa = 1\nmax_fps = 120\n".parse().unwrap();
-        let o = machine_overrides(&t, "laptop").unwrap();
+        let o = machine_overrides(&t, "laptop").unwrap().unwrap();
         assert_eq!(o.ssaa, Some(1.0));
         assert_eq!(o.max_fps, Some(120));
         let t: toml::Table = "[machine.laptop]\nsaa = 1.0\n".parse().unwrap();
         assert!(machine_overrides(&t, "laptop").is_err());
+        let t: toml::Table = "[machine.laptop]\nterrain_quality = 3\noverride_tier = \"none\"\n".parse().unwrap();
+        let o = machine_overrides(&t, "laptop").unwrap().unwrap();
+        assert_eq!((o.terrain_quality, o.override_tier), (Some(3), Some(OverrideTier::None)));
+        for bad in ["terrain_quality = 2", "terrain_quality = \"4\"", "override_tier = \"t3\""] {
+            let t: toml::Table = format!("[machine.laptop]\n{bad}\n").parse().unwrap();
+            assert!(machine_overrides(&t, "laptop").is_err(), "{bad}");
+        }
         let t: toml::Table = "[machine.laptop]\nmax_fps = -1\n".parse().unwrap();
         assert!(machine_overrides(&t, "laptop").is_err());
-        assert_eq!(machine_overrides(&t, "desk").unwrap(), Overrides::default());
+        assert_eq!(machine_overrides(&t, "desk").unwrap(), None);
     }
 }

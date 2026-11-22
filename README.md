@@ -35,36 +35,82 @@ ed-loadout capture --out desk --machine desk
 ```
 
 Copy the `desk` folder to the laptop (USB stick, network share, anything). On the
-laptop, open `desk\profile.toml` in a text editor and add a section for the laptop at
-the end. The numbers are yours to fill in: `ssaa` is the supersampling value to tune
-on the laptop's GPU (the desktop's value is in the captured fxcfg; do not assume it
-carries over), `max_fps` the frame cap you want there.
+laptop, with the game closed and the controllers plugged in:
 
 ```
-[machine.laptop]
-ssaa = <value to tune>
-max_fps = <frame cap>
+ed-loadout apply desk
 ```
 
-Check the desktop's bindings against the controllers plugged into the laptop, giving
-the laptop's device GUIDs (not `--from-log`: the laptop's log describes the laptop's
-own preset, not the desktop's):
+`apply` reads the laptop's panel, GPU and connected controllers, derives the
+resolution, refresh, frame cap, Supersampling, terrain quality and override XML from
+the tier table (see [Hands-off](#hands-off)), prints every value with its reason,
+warns for each device the desktop's bindings use that is not connected, and applies.
+Nothing to type. To pin a value, add a section named after the laptop's hostname to
+the end of `desk\profile.toml`; its keys win over the derived ones, one by one:
 
 ```
-ed-loadout check-binds --devices <GUID,GUID,...> --binds desk\files\Bindings\Custom.4.2.binds
+[machine.FIELDLAPTOP]
+ssaa = 1.25
 ```
 
-Then, with the game closed, apply:
-
-```
-ed-loadout apply desk --machine laptop
-```
+`ed-loadout detect` shows what `apply` would derive without writing anything. To
+refuse the apply when a bound device is missing, add `--strict-binds`.
 
 Before writing, `apply` copies every file it is about to overwrite into
 `Options\_loadout-backup\<timestamp>\`, laid out like the Options dir. To undo, copy
 the `Graphics` and `Bindings` folders from that timestamp folder back over the ones in
 the Options dir (a file the laptop did not have before is not in the backup; delete it
 by hand if you want it gone).
+
+## Hands-off
+
+On Windows, `detect`, `apply` and `check-binds` (without `--devices` / `--from-log`)
+read three facts from the machine itself:
+
+- the primary display's current mode (`EnumDisplaySettingsExW`): width, height,
+  refresh rate;
+- the first hardware GPU (DXGI): name and dedicated VRAM;
+- the connected HID devices (Raw Input), as Elite's binds `Device` GUID `VVVVPPPP`
+  (USB vendor + product, upper-case hex: `045E0B22` an Xbox pad, `231D....` VKB).
+
+The hostname is `%COMPUTERNAME%`. On other platforms, and to try a machine you are not
+sitting at, pass `--facts <file>`: the same facts as TOML, as written by
+`ed-loadout detect --dump <file>`:
+
+```
+hostname = "devmachine02"
+screen_w = 5120
+screen_h = 1440
+refresh_hz = 120
+gpu_name = "NVIDIA GeForce RTX 5090"
+gpu_vram_mb = 32607
+devices = ["231D0126", "231D0127", "231D2204", "045E0B22"]
+```
+
+From the facts:
+
+| Tier | GPU name contains | `ssaa` | `terrain_quality` | `override_tier` |
+|---|---|---|---|---|
+| T1 | `RTX 5090`, `RTX 5080`, `RTX 4090` (not `Laptop`) | budget 16.6 Mpx | 4 | `t1` |
+| T2 | `RTX 5090 Laptop`, `RTX 5080 Laptop`, `RTX 5070 Ti`, `RTX 4080` (`SUPER`), `RTX 4070 Ti SUPER` | budget 10.0 Mpx | 3 | `t2` |
+| T3 | anything else | 1.0 | 3 | `none` |
+
+`screen_width`, `screen_height` and `refresh_hz` come from the panel and `max_fps` =
+`refresh_hz` (VSync stays on; VRR is not detected). For T1 and T2, `ssaa` =
+sqrt(budget / (width x height)), rounded to 0.05 and clamped to 1.0-1.5. The T1 budget
+is measured: devmachine02, a desktop RTX 5090, holds a flat 120 Hz at 5120x1440 with
+Supersampling 1.5 (~16.6 Mpx rendered) at 81-85% GPU use. Every derived Supersampling
+is a starting point, not a tuned value: raise it while GPU use stays under ~85%.
+
+`t1` is devmachine02's beyond-Ultra `GraphicsConfigurationOverride.xml`
+(`tiers/t1.xml`); `t2` is the same without the `DirectionalShadows_Ultra`,
+`SpotShadows_Ultra` and `Volumetrics` blocks (`tiers/t2.xml`); `none` leaves the
+target's override file alone.
+
+Any key in `[machine.<name>]` (name = `--machine`, else the hostname) overrides the
+derived value for that key only. `apply` prints each effective value with its source,
+`derived` or `[machine.<name>]`. With no facts and no `[machine.<name>]`, `apply`
+writes the profile exactly as captured.
 
 ## Exit codes
 
@@ -118,7 +164,7 @@ Graphics/Custom.4.4.fxcfg: SSAAMultiplier 1.500000 -> 1.250000
 ## check-binds
 
 ```
-ed-loadout check-binds [<Bindings dir>] (--devices <GUID,...> | --from-log) [--binds <file>]
+ed-loadout check-binds [<Bindings dir>] [--devices <GUID,...> | --from-log | --facts <file>] [--binds <file>]
 ```
 
 Elite rewrites `StartPreset.4.start` when a bound device is missing at launch, so that
@@ -128,7 +174,9 @@ given; the file named on line 1 of `BindingLoadingErrors.log` if it exists; the 
 
 Every `Device="..."` in the binds file other than `Keyboard`, `Mouse` and `{NoDevice}` is
 checked against `--devices` (the GUIDs connected now), or the missing GUIDs are taken
-from the `Failed to find GUID for device:` lines of the log with `--from-log`. It also
+from the `Failed to find GUID for device:` lines of the log with `--from-log`. With
+neither, the connected devices are detected (Windows) or read from `--facts`; on other
+platforms without `--facts` it exits 3. It also
 warns for each of the four lines of `StartPreset.4.start` that is not `Custom`. Exit 1
 when a device is missing or a preset line is not `Custom`.
 
@@ -161,18 +209,53 @@ backup: Options/Bindings/StartPreset.4.start.bak-20261121-174541-298
 wrote Options/Bindings/StartPreset.4.start (Custom x4, CRLF)
 ```
 
+## detect
+
+```
+ed-loadout detect [--facts <file>] [--dump <file>]
+```
+
+Prints the facts (detected on Windows, else from `--facts`), the tier and every
+derived value with its reason. `--dump` writes the facts as TOML to a new file (never
+over an existing one). Off Windows without `--facts` it exits 3.
+
+```
+$ ed-loadout detect --facts tests/facts/laptop-5090m.toml
+hostname: fieldlaptop
+panel: 2560x1600 @ 240 Hz
+gpu: NVIDIA GeForce RTX 5090 Laptop GPU (24576 MB)
+devices: 231D0126, 231D0127, 045E0B22
+tier: T2
+derived screen_width = 2560  (panel 2560x1600)
+derived screen_height = 1600  (panel 2560x1600)
+derived refresh_hz = 240  (panel refresh rate)
+derived max_fps = 240  (= refresh_hz; VSync stays on, no VRR detection)
+derived ssaa = 1.5  (T2 budget 10.0 Mpx over 2560x1600, 1.55 clamped to 1.5; starting point: raise while GPU use stays under ~85%)
+derived terrain_quality = 3  (T2)
+derived override_tier = t2  (T2: t1 without DirectionalShadows_Ultra, SpotShadows_Ultra, Volumetrics)
+```
+
 ## apply
 
 ```
-ed-loadout apply <profile> [--options <Options dir>] --machine <name>
+ed-loadout apply <profile> [--options <Options dir>] [--machine <name>] [--facts <file>] [--strict-binds]
 ```
 
 Refuses with exit 2 while `EliteDangerous64.exe` is running (checked with `tasklist`
-on Windows; other platforms print a notice and skip the check). Otherwise: copies
-every file it will overwrite to `<Options>/_loadout-backup/<timestamp>/`, writes the
-profile files, and applies the `[machine.<name>]` overrides from `profile.toml` by
-replacing element text in place. No other byte changes. An override whose element is
-absent is an error and nothing is written; elements are never inserted.
+on Windows; other platforms print a notice and skip the check). Otherwise: derives
+values from the facts (see [Hands-off](#hands-off)), lays the `[machine.<name>]` keys
+from `profile.toml` over them, copies every file it will overwrite to
+`<Options>/_loadout-backup/<timestamp>/`, writes the profile files, and applies the
+effective values by replacing element text in place. No other byte changes. An
+override whose element is absent is an error and nothing is written; elements are
+never inserted.
+
+With facts, it first checks the profile's highest `Bindings/Custom.4.<n>.binds` (the
+file it is about to write) against the connected devices and prints
+`warning: bound device <GUID> (<n> bindings) is not connected` for each one missing,
+then applies anyway. With `--strict-binds` a missing device is exit 1 and nothing is
+written; `--strict-binds` without facts is exit 3. Without facts it prints
+`binds check skipped (no device facts)`.
 
 | Override | Element(s) |
 |---|---|
@@ -180,15 +263,18 @@ absent is an error and nothing is written; elements are never inserted.
 | `screen_width`, `screen_height` | `<ScreenWidth>`, `<ScreenHeight>` in `Graphics/DisplaySettings.xml` |
 | `refresh_hz` | `<DX11_RefreshRateNumerator>`, and `<DX11_RefreshRateDenominator>` set to `1` |
 | `max_fps` | `<MaxFramesPerSecond>`, and `<LimitFrameRate>` set to `true` |
+| `terrain_quality` (`3` or `4`) | `<TerrainQuality>` in `Graphics/Custom.*.fxcfg` |
+| `override_tier` (`"t1"`, `"t2"`, `"captured"`, `"none"`) | `Graphics/GraphicsConfigurationOverride.xml`: write `tiers/t1.xml` or `tiers/t2.xml`, the profile's own file (`captured`, the default without facts), or nothing (`none`, the target's file is left alone) |
 
-The `ssaa` target is the `Graphics/Custom.<Major>.<Minor>.fxcfg` with the highest
-version, the one Elite reads; older versions left by game updates are written as
+The fxcfg target for `ssaa` and `terrain_quality` is the
+`Graphics/Custom.<Major>.<Minor>.fxcfg` with the highest version, the one Elite reads
+(printed as `fxcfg target:`); older versions left by game updates are written as
 captured. Other `Custom.*fxcfg*` names (a `.bak`, say) are ignored with a notice. If
 the Options dir already holds a newer `Custom.*.fxcfg` than the profile's (the target
-machine is on a later game version), `ssaa` is an error and nothing is written.
+machine is on a later game version), either key is an error and nothing is written.
 
-Render scale is per GPU: do not copy devmachine02's SSAA 1.5 to a smaller card, give
-that machine its own `ssaa`.
+Render scale is per GPU: do not copy devmachine02's SSAA 1.5 to a smaller card. With
+facts, `apply` derives a starting value; without, give that machine its own `ssaa`.
 
 ```
 $ cat >> devmachine02-profile/profile.toml
@@ -197,6 +283,11 @@ ssaa = 1.25
 max_fps = 120
 
 $ ed-loadout apply devmachine02-profile --options Options --machine laptop
+notice: no device facts on this platform; pass --facts <file>
+effective max_fps = 120  ([machine.laptop])
+effective ssaa = 1.25  ([machine.laptop])
+binds check skipped (no device facts)
+fxcfg target: Graphics/Custom.4.4.fxcfg
 ssaa target: Graphics/Custom.4.4.fxcfg
 override Graphics/Custom.4.4.fxcfg: SSAAMultiplier = 1.250000
 override Graphics/DisplaySettings.xml: MaxFramesPerSecond = 120

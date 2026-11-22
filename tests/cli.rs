@@ -490,8 +490,8 @@ fn v01_c2_apply_ssaa_refuses_when_target_has_a_newer_fxcfg() {
 }
 
 #[test]
-fn v01_c4_version_is_0_1_1() {
-    bin().arg("--version").assert().success().stdout("ed-loadout 0.1.1\n");
+fn v02_c6_version_is_0_2_0() {
+    bin().arg("--version").assert().success().stdout("ed-loadout 0.2.0\n");
 }
 
 /// `<base>/Frontier Developments/Elite Dangerous/Options`, with the

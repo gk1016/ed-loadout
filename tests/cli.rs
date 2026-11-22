@@ -798,3 +798,51 @@ fn v02_c2_no_facts_no_machine_applies_as_captured() {
         assert_eq!(fs::read(target.join(rel)).unwrap(), fs::read(fixture().join(rel)).unwrap(), "{rel}");
     }
 }
+
+#[test]
+fn v02_c3_terrain_quality_only_targets_the_fxcfg_and_refuses_a_newer_one() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "\n[machine.laptop]\nterrain_quality = 3\noverride_tier = \"captured\"\n");
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+    let out = stdout_of(bin().arg("apply").arg(&profile).arg("--options").arg(&target).args(["--machine", "laptop"]), 0);
+    assert!(out.contains("fxcfg target: Graphics/Custom.4.4.fxcfg\n"), "{out}");
+    assert!(!out.contains("ssaa target:"), "{out}");
+    assert!(out.contains("effective terrain_quality = 3  ([machine.laptop])\n"), "{out}");
+    assert!(out.contains("effective override_tier = captured  ([machine.laptop])\n"), "{out}");
+    let fx44 = fs::read(fixture().join("Graphics/Custom.4.4.fxcfg")).unwrap();
+    assert_eq!(
+        changed_lines(&fx44, &fs::read(target.join("Graphics/Custom.4.4.fxcfg")).unwrap()),
+        vec![(24, "\t<TerrainQuality>4</TerrainQuality>".into(), "\t<TerrainQuality>3</TerrainQuality>".into())]
+    );
+
+    let target = tmp.path().join("Newer");
+    copy_tree(&fixture(), &target);
+    fs::write(target.join("Graphics/Custom.4.5.fxcfg"), &fx44).unwrap();
+    let err = bin()
+        .arg("apply")
+        .arg(&profile)
+        .arg("--options")
+        .arg(&target)
+        .args(["--machine", "laptop"])
+        .assert()
+        .code(3)
+        .get_output()
+        .stderr
+        .clone();
+    let err = String::from_utf8(err).unwrap();
+    assert!(err.contains("Graphics/Custom.4.5.fxcfg, newer than the profile's Graphics/Custom.4.4.fxcfg"), "{err}");
+    assert!(!target.join("_loadout-backup").exists());
+    assert_eq!(fs::read(target.join("Graphics/Custom.4.4.fxcfg")).unwrap(), fx44);
+}
+
+#[test]
+fn v02_c3_unknown_machine_key_still_rejected() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "\n[machine.laptop]\nterrain = 3\n");
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+    let err = bin().arg("apply").arg(&profile).arg("--options").arg(&target).args(["--machine", "laptop"]).assert().code(3).get_output().stderr.clone();
+    assert!(String::from_utf8(err).unwrap().contains("[machine.laptop] terrain: unknown override"));
+    assert!(!target.join("_loadout-backup").exists());
+}

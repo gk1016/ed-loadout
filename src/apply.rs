@@ -234,6 +234,16 @@ fn machine_overrides(table: &toml::Table, machine: &str) -> Result<Option<Overri
             "screen_height" => o.screen_height = Some(positive_int()?),
             "refresh_hz" => o.refresh_hz = Some(positive_int()?),
             "max_fps" => o.max_fps = Some(positive_int()?),
+            "terrain_quality" => match value.as_integer() {
+                Some(n @ (3 | 4)) => o.terrain_quality = Some(n),
+                _ => return Err(format!("[machine.{machine}] terrain_quality: expected 3 or 4")),
+            },
+            "override_tier" => {
+                let t = value.as_str().and_then(OverrideTier::parse).ok_or_else(|| {
+                    format!("[machine.{machine}] override_tier: expected \"t1\", \"t2\", \"captured\" or \"none\"")
+                })?;
+                o.override_tier = Some(t);
+            }
             _ => return Err(format!("[machine.{machine}] {key}: unknown override")),
         }
     }
@@ -414,6 +424,13 @@ mod tests {
         assert_eq!(o.max_fps, Some(120));
         let t: toml::Table = "[machine.laptop]\nsaa = 1.0\n".parse().unwrap();
         assert!(machine_overrides(&t, "laptop").is_err());
+        let t: toml::Table = "[machine.laptop]\nterrain_quality = 3\noverride_tier = \"none\"\n".parse().unwrap();
+        let o = machine_overrides(&t, "laptop").unwrap().unwrap();
+        assert_eq!((o.terrain_quality, o.override_tier), (Some(3), Some(OverrideTier::None)));
+        for bad in ["terrain_quality = 2", "terrain_quality = \"4\"", "override_tier = \"t3\""] {
+            let t: toml::Table = format!("[machine.laptop]\n{bad}\n").parse().unwrap();
+            assert!(machine_overrides(&t, "laptop").is_err(), "{bad}");
+        }
         let t: toml::Table = "[machine.laptop]\nmax_fps = -1\n".parse().unwrap();
         assert!(machine_overrides(&t, "laptop").is_err());
         assert_eq!(machine_overrides(&t, "desk").unwrap(), None);

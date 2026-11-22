@@ -96,7 +96,7 @@ From the facts:
 | T3 | anything else | 1.0 | 3 | `none` |
 
 `screen_width`, `screen_height` and `refresh_hz` come from the panel and `max_fps` =
-`refresh_hz` (VSync stays on; VRR is not detected). For T1 and T2, `ssaa` =
+`refresh_hz` (VRR is not detected; `<VSync>` is never edited, it stays as captured). For T1 and T2, `ssaa` =
 sqrt(budget / (width x height)), rounded to 0.05 and clamped to 1.0-1.5. The T1 budget
 is measured: devmachine02, a desktop RTX 5090, holds a flat 120 Hz at 5120x1440 with
 Supersampling 1.5 (~16.6 Mpx rendered) at 81-85% GPU use. Every derived Supersampling
@@ -229,7 +229,7 @@ tier: T2
 derived screen_width = 2560  (panel 2560x1600)
 derived screen_height = 1600  (panel 2560x1600)
 derived refresh_hz = 240  (panel refresh rate)
-derived max_fps = 240  (= refresh_hz; VSync stays on, no VRR detection)
+derived max_fps = 240  (= refresh_hz; VRR is not detected, VSync is left as captured)
 derived ssaa = 1.5  (T2 budget 10.0 Mpx over 2560x1600, 1.55 clamped to 1.5; starting point: raise while GPU use stays under ~85%)
 derived terrain_quality = 3  (T2)
 derived override_tier = t2  (T2: t1 without DirectionalShadows_Ultra, SpotShadows_Ultra, Volumetrics)

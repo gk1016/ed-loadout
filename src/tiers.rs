@@ -117,7 +117,7 @@ pub fn derive(f: &Facts) -> Derived {
         ("screen_width", f.screen_w.to_string(), format!("panel {panel}")),
         ("screen_height", f.screen_h.to_string(), format!("panel {panel}")),
         ("refresh_hz", f.refresh_hz.to_string(), "panel refresh rate".to_owned()),
-        ("max_fps", f.refresh_hz.to_string(), "= refresh_hz; VSync stays on, no VRR detection".to_owned()),
+        ("max_fps", f.refresh_hz.to_string(), "= refresh_hz; VRR is not detected, VSync is left as captured".to_owned()),
         ("ssaa", fmt_ssaa(ssaa), ssaa_reason),
         ("terrain_quality", terrain_quality.to_string(), tname),
         ("override_tier", override_tier.as_str().to_owned(), ot_reason.to_owned()),

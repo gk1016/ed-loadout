@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  Beyond-Ultra override. Built 2026-09-18 against the installed
+  elite-dangerous-odyssey-64\GraphicsConfiguration.xml (4.4-era schema).
+  Every tag below exists in that base file. The override can only MODIFY
+  existing values, it cannot add elements, so nothing here adds any.
+
+  Applies only when the matching in-game tier is selected:
+    Environment = Ultra, Galaxy Map = High, Reflections (Envmap) = High,
+    Directional Shadows = Ultra, Spot Shadows = Ultra.
+
+  Revert: delete this file. The game regenerates an empty one.
+-->
+<GraphicsConfig>
+
+	<!-- PROVEN. Stock Ultra 2560 / 328. Do not exceed 4096: texture pop-in
+	     around starports gets worse regardless of VRAM. -->
+	<Planets>
+		<Ultra>
+			<TextureSize>4096</TextureSize>
+			<WorkPerFrame>512</WorkPerFrame>
+			<!-- ROUND 2, EXPERIMENTAL. Stock 6 / 100. Units of the pool
+			     budget are unknown; pull both if planets hitch or VRAM
+			     balloons on approach. -->
+			<AtmosphereSteps>8</AtmosphereSteps>
+			<TexturePoolBudget>200</TexturePoolBudget>
+		</Ultra>
+	</Planets>
+
+	<!-- PROVEN. Stock 2048. Above 4096 shows no visible gain, only longer
+	     hyperspace bakes. -->
+	<GalaxyBackground>
+		<High>
+			<TextureSize>4096</TextureSize>
+		</High>
+	</GalaxyBackground>
+
+	<!-- PROVEN. Stock 256 / 8. Reflection cube map; NumMips = log2(size). -->
+	<Envmap>
+		<High>
+			<TextureSize>1024</TextureSize>
+			<NumMips>10</NumMips>
+		</High>
+	</Envmap>
+
+	<!-- StarInstanceCount carried over unchanged from your current file.
+	     High tier: nebula counts/resolution and Milky Way density raised.
+	     Cost lands on the skybox bake during hyperspace, not on frame rate.
+	     If jumps near dense nebula regions hitch or hang, back off
+	     HighResNebulasCount and HighResNebulaDimensions first.
+	     Stock High: 30 / 40 / 16 / 1 / 64 / 256 / 35 / 138 / 16000 / 4000 -->
+	<GalaxyMap>
+		<Low>
+			<StarInstanceCount>180000</StarInstanceCount>
+		</Low>
+		<Medium>
+			<StarInstanceCount>180000</StarInstanceCount>
+		</Medium>
+		<High>
+			<NebulasCount>100</NebulasCount>
+			<NebulasInBackgroundCount>100</NebulasInBackgroundCount>
+			<LowResNebulasCount>32</LowResNebulasCount>
+			<HighResNebulasCount>8</HighResNebulasCount>
+			<LowResNebulaDimensions>128</LowResNebulaDimensions>
+			<HighResNebulaDimensions>512</HighResNebulaDimensions>
+			<LowResSamplesCount>64</LowResSamplesCount>
+			<HighResSamplesCount>256</HighResSamplesCount>
+			<MilkyWayInstancesCount>32768</MilkyWayInstancesCount>
+			<StarInstanceCount>180000</StarInstanceCount>
+		</High>
+	</GalaxyMap>
+
+	<!-- COMMUNITY-TESTED values, schema unchanged in 4.4.
+	     Stock Ultra: 2 / 6 / 512. Atlas size left at 8192. -->
+	<SpotShadows_Ultra>
+		<NumCacheShadows>4</NumCacheShadows>
+		<NumSpotShadows>8</NumSpotShadows>
+		<CacheShadowSize>1024</CacheShadowSize>
+	</SpotShadows_Ultra>
+
+	<!-- EXPERIMENTAL. 4.2 replaced the old Shadows_Ultra/SliceSize/FrustumN
+	     schema with this Cascade schema; no published post-4.2 profile was
+	     found. CellResolution is the per-cascade shadow map size (stock 2048).
+	     Only the resolution is touched; cascade distances are left stock
+	     because the override cannot add cascades and merge behaviour for the
+	     repeated EndDistance siblings is unknown.
+	     FIRST THING TO REMOVE if you see shadow flicker, missing shadows, or
+	     a crash on load. -->
+	<DirectionalShadows_Ultra>
+		<Profile_Space_Cockpit>
+			<Cascade>
+				<CellResolution>4096</CellResolution>
+			</Cascade>
+		</Profile_Space_Cockpit>
+		<Profile_Space_Humanoid>
+			<Cascade>
+				<CellResolution>4096</CellResolution>
+			</Cascade>
+		</Profile_Space_Humanoid>
+		<Profile_Space_AsteroidField>
+			<Cascade>
+				<CellResolution>4096</CellResolution>
+			</Cascade>
+		</Profile_Space_AsteroidField>
+		<Profile_Planet_Cockpit>
+			<Cascade>
+				<CellResolution>4096</CellResolution>
+			</Cascade>
+		</Profile_Planet_Cockpit>
+		<Profile_Planet_Humanoid>
+			<Cascade>
+				<CellResolution>4096</CellResolution>
+			</Cascade>
+		</Profile_Planet_Humanoid>
+	</DirectionalShadows_Ultra>
+
+	<!-- ROUND 2, EXPERIMENTAL. Terrain material blend targets, stock 1024.
+	     Set on both top tiers so it applies whether Terrain Quality is
+	     Ultra or Ultra for Capture. -->
+	<Terrain>
+		<Ultra>
+			<BlendTargetsResolution>2048</BlendTargetsResolution>
+		</Ultra>
+		<UltraPlus>
+			<BlendTargetsResolution>2048</BlendTargetsResolution>
+		</UltraPlus>
+	</Terrain>
+
+	<!-- ROUND 2, EXPERIMENTAL. Stock 1 (fog/ring volumetrics rendered
+	     downscaled). 0 is inferred to mean full resolution because JetCones
+	     High/Ultra ship with DownscalingFactor 0 in the same base file.
+	     Not confirmed for this section. PULL THIS BLOCK FIRST if fog or
+	     ring haze breaks, or the game crashes on load after this round. -->
+	<Volumetrics>
+		<Ultra>
+			<DownscalingFactor>0</DownscalingFactor>
+		</Ultra>
+	</Volumetrics>
+
+</GraphicsConfig>

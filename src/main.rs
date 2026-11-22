@@ -78,8 +78,12 @@ enum Cmd {
         #[arg(long)]
         options: Option<PathBuf>,
         /// Machine whose [machine.<name>] overrides apply.
+        /// Default: the hostname from the device facts.
         #[arg(long)]
-        machine: String,
+        machine: Option<String>,
+        /// Facts TOML to use instead of detecting this machine.
+        #[arg(long)]
+        facts: Option<PathBuf>,
     },
     /// Print the panel, GPU and connected devices, and the values derived
     /// from them. Windows detects; elsewhere pass --facts.
@@ -127,9 +131,8 @@ fn main() -> ExitCode {
         Cmd::RestorePreset { bindings_dir, preset } => {
             default_dir(bindings_dir, Some("Bindings")).and_then(|d| binds::restore_preset(&d, &preset))
         }
-        Cmd::Apply { profile, options, machine } => {
-            default_dir(options, None).and_then(|o| apply::run(&profile, &o, &machine))
-        }
+        Cmd::Apply { profile, options, machine, facts } => default_dir(options, None)
+            .and_then(|o| apply::run(&profile, &o, machine.as_deref(), facts.as_deref())),
         Cmd::Detect { facts, dump } => facts::run_detect(facts.as_deref(), dump.as_deref()),
     };
     match result {

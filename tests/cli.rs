@@ -664,3 +664,137 @@ fn v02_c1_detect_without_facts_off_windows_exits_3_naming_the_flag() {
     let err = String::from_utf8(err).unwrap();
     assert!(err.contains("--facts"), "{err}");
 }
+
+fn tier_xml(name: &str) -> Vec<u8> {
+    fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("tiers").join(name)).unwrap()
+}
+
+/// `apply <profile> --options <target> --facts <facts>` plus `extra` args; (code, stdout, stderr).
+fn apply_with_facts(profile: &Path, target: &Path, facts: &Path, extra: &[&str]) -> (i32, String, String) {
+    let out = bin()
+        .arg("apply")
+        .arg(profile)
+        .arg("--options")
+        .arg(target)
+        .arg("--facts")
+        .arg(facts)
+        .args(extra)
+        .output()
+        .unwrap();
+    (out.status.code().unwrap(), String::from_utf8(out.stdout).unwrap(), String::from_utf8(out.stderr).unwrap())
+}
+
+#[test]
+fn v02_c2_apply_laptop_facts_derives_everything() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "");
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+    let (code, out, err) = apply_with_facts(&profile, &target, &facts_file("laptop-5090m.toml"), &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("note: no [machine.fieldlaptop] in profile.toml; using the derived values\n"), "{out}");
+    assert!(out.contains("fxcfg target: Graphics/Custom.4.4.fxcfg\n"), "{out}");
+    for line in ["ssaa = 1.5", "terrain_quality = 3", "override_tier = t2", "screen_width = 2560", "max_fps = 240"] {
+        assert!(out.contains(&format!("effective {line}  (derived)\n")), "{line}\n{out}");
+    }
+
+    let fx = "Graphics/Custom.4.4.fxcfg";
+    let ds = "Graphics/DisplaySettings.xml";
+    assert_eq!(
+        changed_lines(&fs::read(fixture().join(fx)).unwrap(), &fs::read(target.join(fx)).unwrap()),
+        vec![(24, "\t<TerrainQuality>4</TerrainQuality>".into(), "\t<TerrainQuality>3</TerrainQuality>".into())]
+    );
+    let ds_text = fs::read_to_string(target.join(ds)).unwrap();
+    for e in [
+        "<ScreenWidth>2560</ScreenWidth>",
+        "<ScreenHeight>1600</ScreenHeight>",
+        "<DX11_RefreshRateNumerator>240</DX11_RefreshRateNumerator>",
+        "<DX11_RefreshRateDenominator>1</DX11_RefreshRateDenominator>",
+        "<MaxFramesPerSecond>240</MaxFramesPerSecond>",
+        "<LimitFrameRate>true</LimitFrameRate>",
+    ] {
+        assert!(ds_text.contains(e), "{e}\n{ds_text}");
+    }
+    assert!(fs::read_to_string(target.join(fx)).unwrap().contains("<SSAAMultiplier>1.500000</SSAAMultiplier>"));
+    let ov = "Graphics/GraphicsConfigurationOverride.xml";
+    assert_eq!(fs::read(target.join(ov)).unwrap(), tier_xml("t2.xml"));
+
+    let stamps: Vec<PathBuf> = fs::read_dir(target.join("_loadout-backup")).unwrap().map(|e| e.unwrap().path()).collect();
+    assert_eq!(stamps.len(), 1, "{stamps:?}");
+    for rel in [fx, ds, ov] {
+        assert_eq!(fs::read(stamps[0].join(rel)).unwrap(), fs::read(fixture().join(rel)).unwrap(), "{rel}");
+    }
+}
+
+#[test]
+fn v02_c2_machine_section_overrides_key_by_key() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "\n[machine.fieldlaptop]\nssaa = 1.25\n");
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+    let (code, out, err) = apply_with_facts(&profile, &target, &facts_file("laptop-5090m.toml"), &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("derived ssaa = 1.5  ("), "{out}");
+    assert!(out.contains("effective ssaa = 1.25  ([machine.fieldlaptop])\n"), "{out}");
+    assert!(out.contains("effective terrain_quality = 3  (derived)\n"), "{out}");
+    assert!(out.contains("effective max_fps = 240  (derived)\n"), "{out}");
+    let fx = fs::read_to_string(target.join("Graphics/Custom.4.4.fxcfg")).unwrap();
+    assert!(fx.contains("<SSAAMultiplier>1.250000</SSAAMultiplier>"), "{fx}");
+    assert!(fx.contains("<TerrainQuality>3</TerrainQuality>"), "{fx}");
+    assert_eq!(fs::read(target.join("Graphics/GraphicsConfigurationOverride.xml")).unwrap(), tier_xml("t2.xml"));
+    // --machine names a different section; the facts' hostname is not used then.
+    let (code, out, _) = apply_with_facts(&profile, &target, &facts_file("laptop-5090m.toml"), &["--machine", "other"]);
+    assert_eq!(code, 0);
+    assert!(out.contains("effective ssaa = 1.5  (derived)\n"), "{out}");
+}
+
+#[test]
+fn v02_c2_t1_facts_write_t1_xml_identical_to_the_fixture() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "");
+    let target = tmp.path().join("Target");
+    fs::create_dir_all(&target).unwrap();
+    let (code, out, err) = apply_with_facts(&profile, &target, &facts_file("devmachine02.toml"), &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    let ov = "Graphics/GraphicsConfigurationOverride.xml";
+    assert_eq!(tier_xml("t1.xml"), fs::read(fixture().join(ov)).unwrap());
+    assert_eq!(fs::read(target.join(ov)).unwrap(), tier_xml("t1.xml"));
+}
+
+#[test]
+fn v02_c2_unknown_gpu_leaves_the_target_override_alone() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "");
+    let target = tmp.path().join("Target");
+    copy_tree(&fixture(), &target);
+    let ov = target.join("Graphics/GraphicsConfigurationOverride.xml");
+    let theirs = b"<GraphicsConfig>\r\n</GraphicsConfig>\r\n";
+    fs::write(&ov, theirs).unwrap();
+    let (code, out, err) = apply_with_facts(&profile, &target, &facts_file("unknown.toml"), &[]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("override_tier none: Graphics/GraphicsConfigurationOverride.xml in the Options dir is left alone\n"), "{out}");
+    assert!(!out.contains("wrote Graphics/GraphicsConfigurationOverride.xml"), "{out}");
+    assert_eq!(fs::read(&ov).unwrap(), theirs);
+    assert!(fs::read_to_string(target.join("Graphics/Custom.4.4.fxcfg")).unwrap().contains("<SSAAMultiplier>1.000000<"));
+}
+
+#[test]
+fn v02_c2_no_facts_no_machine_applies_as_captured() {
+    let (tmp, src) = fixture_copy();
+    let profile = laptop_profile(tmp.path(), &src, "");
+    let target = tmp.path().join("Target");
+    fs::create_dir_all(&target).unwrap();
+    let out = bin().arg("apply").arg(&profile).arg("--options").arg(&target).output().unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.contains("applying the profile as captured"), "{stdout}");
+    assert!(!stdout.contains("effective "), "{stdout}");
+    for rel in [
+        "Graphics/Custom.4.4.fxcfg",
+        "Graphics/DisplaySettings.xml",
+        "Graphics/GraphicsConfigurationOverride.xml",
+        "Bindings/Custom.4.2.binds",
+    ] {
+        assert_eq!(fs::read(target.join(rel)).unwrap(), fs::read(fixture().join(rel)).unwrap(), "{rel}");
+    }
+}

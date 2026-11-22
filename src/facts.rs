@@ -91,10 +91,15 @@ pub fn run_detect(file: Option<&Path>, dump: Option<&Path>) -> Result<i32, Strin
     println!("tier: {:?}", d.tier);
     d.print();
     if let Some(out) = dump {
-        if out.exists() {
-            return Err(format!("{}: already exists; refusing to overwrite", out.display()));
-        }
-        fs::write(out, to_toml(&f)).map_err(|e| format!("{}: {e}", out.display()))?;
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new().write(true).create_new(true).open(out).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                format!("{}: already exists; refusing to overwrite", out.display())
+            } else {
+                format!("{}: {e}", out.display())
+            }
+        })?;
+        file.write_all(to_toml(&f).as_bytes()).map_err(|e| format!("{}: {e}", out.display()))?;
         println!("wrote {}", out.display());
     }
     Ok(0)

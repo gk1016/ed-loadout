@@ -97,7 +97,7 @@ pub fn derive(f: &Facts) -> Derived {
         Tier::T3 => (1.0, "T3 (GPU not in the tier table): fixed 1.0".to_owned()),
         Tier::T1 | Tier::T2 => {
             let (name, budget) = if tier == Tier::T1 { ("T1", T1_BUDGET_MPX) } else { ("T2", T2_BUDGET_MPX) };
-            let px = (f.screen_w * f.screen_h) as f64;
+            let px = f.screen_w as f64 * f.screen_h as f64;
             let rounded = ((budget * 1e6 / px).sqrt() * 20.0).round() / 20.0;
             let v = rounded.clamp(SSAA_MIN, SSAA_MAX);
             let clamp = if v != rounded { format!(", {} clamped to {}", fmt_ssaa(rounded), fmt_ssaa(v)) } else { String::new() };
@@ -186,6 +186,8 @@ mod tests {
         assert_eq!(derive(&facts(2560, 1600, "RTX 5090 Laptop GPU")).ssaa, 1.5);
         assert_eq!(derive(&facts(7680, 4320, "RTX 5090")).ssaa, 1.0);
         assert_eq!(derive(&facts(3840, 2160, "RX 7800 XT")).ssaa, 1.0);
+        // No overflow on absurd but parseable facts (Codex check 5).
+        assert_eq!(derive(&facts(i64::MAX, i64::MAX, "RTX 5090")).ssaa, 1.0);
         assert_eq!(fmt_ssaa(1.0), "1.0");
         assert_eq!(fmt_ssaa(1.1), "1.1");
         assert_eq!(fmt_ssaa(1.25), "1.25");

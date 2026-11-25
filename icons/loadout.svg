@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- LOADOUT mark: a bracketed hexagon with a horizontal rule. -->
+  <rect width="64" height="64" fill="#070B14"/>
+  <g fill="none" stroke="#E6C27A" stroke-width="4" stroke-linejoin="miter" stroke-linecap="butt">
+    <polyline points="15.00,9.00 6.00,9.00 6.00,55.00 15.00,55.00"/>
+    <polyline points="49.00,9.00 58.00,9.00 58.00,55.00 49.00,55.00"/>
+    <polygon points="32.00,16.00 45.86,24.00 45.86,40.00 32.00,48.00 18.14,40.00 18.14,24.00"/>
+    <line x1="18.14" y1="32" x2="45.86" y2="32"/>
+  </g>
+</svg>

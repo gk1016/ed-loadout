@@ -12,6 +12,11 @@ Popup {
     readonly property var files: plan.files || []
     readonly property var missing: plan.unconnected || []
     readonly property string backupRoot: plan.backup_root || ""
+    // Files actually written: new or with different bytes. "Same bytes" rows are not writes.
+    readonly property int writes: files.filter(function (f) { return !f.exists || f.changed }).length
+    readonly property int unchanged: files.length - writes
+    readonly property string headline: writes + (writes === 1 ? " file" : " files") + " will be written"
+                                        + (unchanged > 0 ? ", " + unchanged + " unchanged" : "")
     function accept() { sheet.close(); sheet.accepted() }
 
     modal: true
@@ -61,7 +66,7 @@ Popup {
         PaneHead {
             width: sheet.width - 2
             title: "APPLY " + (Core.selectedProfile.name || "").toUpperCase()
-            note: sheet.files.length + (sheet.files.length === 1 ? " file" : " files") + " will be written"
+            note: sheet.headline
         }
         Pair { width: sheet.width - 2; label: "OPTIONS DIR"; value: Core.optionsDir }
         Pair { width: sheet.width - 2; label: "BACKUP FOLDER"; value: sheet.backupRoot + "\\<time of this apply>" }

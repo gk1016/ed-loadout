@@ -204,7 +204,8 @@ ApplicationWindow {
         } else if (s === "apply") {
             console.info("script: apply enabled=" + win.canApply)
             win.askApply()
-            console.info("script: confirm open=" + confirm.visible + " files=" + confirm.files.length + " backup under " + confirm.backupRoot)
+            console.info("script: confirm open=" + confirm.visible + " files=" + confirm.files.length + " backup under " + confirm.backupRoot
+                         + " header=\"" + confirm.headline + "\"")
             script = ["accept"].concat(script)
         } else if (s === "accept") {
             if (confirm.visible) {

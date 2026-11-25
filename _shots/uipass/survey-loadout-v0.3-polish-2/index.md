@@ -1,0 +1,21 @@
+﻿# UI survey `loadout-v0.3-polish-2`
+
+Packaged exe built from `5c17a06`, captured 2026-11-25 22:07:24Z on NUCBOX_EVO-X2. DETECTED is this machine, read live. The Options dir is a scratch copy of `fixtures/devmachine02`; the profiles are two captures of it made with the packaged `ed-loadout.exe` (`devmachine02` carries `[machine.NUCBOX_EVO-X2] max_fps = 60`). The LOG captures follow a real APPLY into the scratch dir. Desk posture, 1320 wide. Produced by `shots.ps1 -Survey loadout-v0.3-polish-2`.
+
+| File | Screen | Theme | Posture | Pixels, size | QML | State |
+|---|---|---|---|---|---|---|
+| `survey-loadout-v0.3-polish-2-home-empty-deepfield-desk.jpg` | home-empty | deepfield | desk (1320) | 1320x800, 68 KB | `qml/HomePage.qml`, `qml/ProfilesPage.qml`, `qml/Main.qml`, `qml/Rail.qml`, `qml/Theme.qml` | first open: no profile folder yet |
+| `survey-loadout-v0.3-polish-2-home-deepfield-desk.jpg` | home | deepfield | desk (1320) | 1320x800, 129 KB | `qml/HomePage.qml`, `qml/ProfilesPage.qml`, `qml/Main.qml`, `qml/Rail.qml`, `qml/Theme.qml` | devmachine02 selected: derived rows and one [machine] row |
+| `survey-loadout-v0.3-polish-2-profiles-deepfield-desk.jpg` | profiles | deepfield | desk (1320) | 1320x800, 98 KB | `qml/ProfilesPage.qml`, `qml/Main.qml`, `qml/Rail.qml`, `qml/Theme.qml` | two profiles, the files of the selected one |
+| `survey-loadout-v0.3-polish-2-settings-deepfield-desk.jpg` | settings | deepfield | desk (1320) | 1320x800, 85 KB | `qml/SettingsPage.qml`, `qml/Field.qml`, `qml/Main.qml`, `qml/Rail.qml`, `qml/Theme.qml` | folders, theme, about |
+| `survey-loadout-v0.3-polish-2-confirm-deepfield-desk.jpg` | confirm | deepfield | desk (1320) | 1320x800, 101 KB | `qml/ConfirmApply.qml`, `qml/HomePage.qml`, `qml/Main.qml`, `qml/Rail.qml`, `qml/Theme.qml` | the APPLY confirm: files and backup folder |
+| `survey-loadout-v0.3-polish-2-home-empty-daylight-desk.jpg` | home-empty | daylight | desk (1320) | 1320x800, 69 KB | `qml/HomePage.qml`, `qml/ProfilesPage.qml`, `qml/Main.qml`, `qml/Rail.qml`, `qml/Theme.qml` | first open: no profile folder yet |
+| `survey-loadout-v0.3-polish-2-home-daylight-desk.jpg` | home | daylight | desk (1320) | 1320x800, 136 KB | `qml/HomePage.qml`, `qml/ProfilesPage.qml`, `qml/Main.qml`, `qml/Rail.qml`, `qml/Theme.qml` | devmachine02 selected: derived rows and one [machine] row |
+| `survey-loadout-v0.3-polish-2-profiles-daylight-desk.jpg` | profiles | daylight | desk (1320) | 1320x800, 101 KB | `qml/ProfilesPage.qml`, `qml/Main.qml`, `qml/Rail.qml`, `qml/Theme.qml` | two profiles, the files of the selected one |
+| `survey-loadout-v0.3-polish-2-settings-daylight-desk.jpg` | settings | daylight | desk (1320) | 1320x800, 90 KB | `qml/SettingsPage.qml`, `qml/Field.qml`, `qml/Main.qml`, `qml/Rail.qml`, `qml/Theme.qml` | folders, theme, about |
+| `survey-loadout-v0.3-polish-2-confirm-daylight-desk.jpg` | confirm | daylight | desk (1320) | 1320x800, 100 KB | `qml/ConfirmApply.qml`, `qml/HomePage.qml`, `qml/Main.qml`, `qml/Rail.qml`, `qml/Theme.qml` | the APPLY confirm: files and backup folder |
+| `survey-loadout-v0.3-polish-2-home-game-running-deepfield-desk.jpg` | home-game-running | deepfield | desk (1320) | 1320x800, 130 KB | `qml/HomePage.qml`, `qml/Main.qml`, `qml/Rail.qml`, `qml/Theme.qml` | Elite running (faked, debug-core twin): APPLY and RESTORE off, GAME red |
+| `survey-loadout-v0.3-polish-2-home-game-running-daylight-desk.jpg` | home-game-running | daylight | desk (1320) | 1320x800, 138 KB | `qml/HomePage.qml`, `qml/Main.qml`, `qml/Rail.qml`, `qml/Theme.qml` | Elite running (faked, debug-core twin): APPLY and RESTORE off, GAME red |
+| `survey-loadout-v0.3-polish-2-log-deepfield-desk.jpg` | log | deepfield | desk (1320) | 1320x800, 146 KB | `qml/LogPage.qml`, `qml/Main.qml`, `qml/Rail.qml`, `qml/Theme.qml` | after APPLY: the lines the CLI prints |
+| `survey-loadout-v0.3-polish-2-log-daylight-desk.jpg` | log | daylight | desk (1320) | 1320x800, 157 KB | `qml/LogPage.qml`, `qml/Main.qml`, `qml/Rail.qml`, `qml/Theme.qml` | after APPLY: the lines the CLI prints |
+| `survey-loadout-v0.3-polish-2-installed-home-deepfield-desk.jpg` | installed-home | deepfield | desk (1320) | 1320x800, 126 KB | `qml/HomePage.qml`, `qml/Main.qml`, `qml/Rail.qml`, `qml/Theme.qml` | the INSTALLED exe (%LOCALAPPDATA%\LOADOUT), captured by ship.ps1 2026-11-25 22:05:55Z |

@@ -30,7 +30,10 @@ Rectangle {
 
         // ---- the list
         ColumnLayout {
-            Layout.fillWidth: true
+            // On the PROFILES page the list is HOME's pane width (430); on HOME
+            // the SplitView sizes it, so it fills.
+            Layout.fillWidth: !page.detail
+            Layout.maximumWidth: page.detail ? 430 : Number.POSITIVE_INFINITY
             Layout.fillHeight: true
             Layout.preferredWidth: 430
             spacing: 0

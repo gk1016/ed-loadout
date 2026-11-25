@@ -27,7 +27,7 @@ Popup {
     padding: 0
     // A docked sheet: hairline, radius 2, no shadow.
     background: Rectangle { color: Theme.pane; radius: Theme.radius; border.width: 1; border.color: Theme.ruleHi }
-    Overlay.modal: Rectangle { color: Theme.light ? Qt.rgba(0.04, 0.06, 0.12, 0.35) : Qt.rgba(0, 0, 0, 0.6) }
+    Overlay.modal: Rectangle { color: Theme.light ? Qt.rgba(0.04, 0.06, 0.12, 0.6) : Qt.rgba(0, 0, 0, 0.75) }
 
     component Rule: Rectangle { width: parent ? parent.width : 0; height: 1; color: Theme.rule }
     component Cell: Text {

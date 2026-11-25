@@ -109,7 +109,7 @@ Rectangle {
         }
 
         PaneHead { width: parent.width; title: "ABOUT" }
-        Setting { label: "VERSION"; Value { text: BuildInfo.version } }
+        Setting { label: "VERSION"; Value { text: "v" + BuildInfo.version } }
         Setting { label: "BUILT"; Value { text: BuildInfo.built + "   @ " + BuildInfo.sha } }
         Setting {
             label: "COMMAND LINE"

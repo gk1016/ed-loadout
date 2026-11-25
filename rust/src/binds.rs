@@ -119,7 +119,7 @@ pub fn preset_warnings(dir: &Path) -> Vec<String> {
 
 pub fn run(dir: &Path, devices: Option<&str>, from_log: bool, binds: Option<&Path>) -> Result<i32, String> {
     let (binds_path, how) = resolve_binds(dir, binds)?;
-    println!("binds: {} (from {how})", binds_path.display());
+    say!("binds: {} (from {how})", binds_path.display());
     let text = fs::read(&binds_path).map_err(|e| format!("{}: {e}", binds_path.display()))?;
     let bound = bound_devices(&String::from_utf8_lossy(&text));
 
@@ -144,14 +144,14 @@ pub fn run(dir: &Path, devices: Option<&str>, from_log: bool, binds: Option<&Pat
     for guid in &missing {
         let n = bound.get(guid).copied().unwrap_or(0);
         let plural = if n == 1 { "binding" } else { "bindings" };
-        println!("missing device: {guid} ({n} {plural})");
+        say!("missing device: {guid} ({n} {plural})");
     }
     let warnings = preset_warnings(dir);
     for w in &warnings {
-        println!("warning: {w}");
+        say!("warning: {w}");
     }
     if missing.is_empty() && warnings.is_empty() {
-        println!("ok: every bound device present, {PRESET_NAME} is Custom x4");
+        say!("ok: every bound device present, {PRESET_NAME} is Custom x4");
         Ok(0)
     } else {
         Ok(1)
@@ -170,15 +170,15 @@ pub fn restore_preset(dir: &Path, preset: &str) -> Result<i32, String> {
             return Err(format!("{}: backup already exists", bak.display()));
         }
         fs::copy(&path, &bak).map_err(|e| format!("{}: {e}", bak.display()))?;
-        println!("backup: {}", bak.display());
+        say!("backup: {}", bak.display());
     } else if !dir.is_dir() {
         return Err(format!("{}: not a directory", dir.display()));
     } else {
-        println!("note: {} did not exist; nothing to back up", path.display());
+        say!("note: {} did not exist; nothing to back up", path.display());
     }
     let body = format!("{preset}\r\n").repeat(4);
     fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
-    println!("wrote {} ({preset} x4, CRLF)", path.display());
+    say!("wrote {} ({preset} x4, CRLF)", path.display());
     Ok(0)
 }
 

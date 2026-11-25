@@ -36,12 +36,12 @@ pub fn run(options: &Path, out: &Path, machine: &str) -> Result<i32, String> {
         }
         fs::write(&dst, &bytes).map_err(|e| format!("{}: {e}", dst.display()))?;
         toml.push_str(&format!("{} = {}\n", toml_str(rel), toml_str(&sha256_hex(&bytes))));
-        println!("captured {rel}");
+        say!("captured {rel}");
     }
 
     let profile_toml = out.join("profile.toml");
     fs::write(&profile_toml, toml).map_err(|e| format!("{}: {e}", profile_toml.display()))?;
-    println!("wrote {} ({} files)", profile_toml.display(), files.len());
+    say!("wrote {} ({} files)", profile_toml.display(), files.len());
     Ok(0)
 }
 

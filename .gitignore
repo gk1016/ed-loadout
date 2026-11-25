@@ -1,1 +1,5 @@
-/target
+/build/
+/dist/
+/rust/target/
+/_shots/
+*.log

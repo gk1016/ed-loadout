@@ -20,10 +20,20 @@ pub struct Facts {
 
 pub const NO_FACTS: &str = "no device facts on this platform; pass --facts <file>";
 
-/// `--facts` if given, else Windows detection, else `None`.
+/// Set to `1`, nothing is detected: no `--facts` means no facts. For tests on
+/// a Windows host, where detection would read the build machine's hardware.
+pub const NO_DETECT_ENV: &str = "LOADOUT_NO_DETECT";
+
+/// `--facts` if given, else Windows detection (unless `LOADOUT_NO_DETECT=1`),
+/// else `None`.
 pub fn load(file: Option<&Path>) -> Result<Option<Facts>, String> {
     match file {
         Some(p) => read(p).map(Some),
+        None if std::env::var_os(NO_DETECT_ENV).is_some_and(|v| v == "1") => {
+            static ONCE: std::sync::Once = std::sync::Once::new();
+            ONCE.call_once(|| note!("notice: {NO_DETECT_ENV}=1; device detection skipped"));
+            Ok(None)
+        }
         None => detect(),
     }
 }
@@ -72,14 +82,15 @@ pub fn to_toml(f: &Facts) -> String {
     t.insert("gpu_name".into(), f.gpu_name.clone().into());
     t.insert("gpu_vram_mb".into(), f.gpu_vram_mb.into());
     t.insert("devices".into(), f.devices.clone().into());
-    toml::to_string(&t).expect("a table of strings and integers serialises")
+    // A table of strings and integers always serialises.
+    toml::to_string(&t).unwrap_or_default()
 }
 
 pub fn print(f: &Facts) {
-    println!("hostname: {}", f.hostname);
-    println!("panel: {}x{} @ {} Hz", f.screen_w, f.screen_h, f.refresh_hz);
-    println!("gpu: {} ({} MB)", f.gpu_name, f.gpu_vram_mb);
-    println!("devices: {}", if f.devices.is_empty() { "(none)".to_owned() } else { f.devices.join(", ") });
+    say!("hostname: {}", f.hostname);
+    say!("panel: {}x{} @ {} Hz", f.screen_w, f.screen_h, f.refresh_hz);
+    say!("gpu: {} ({} MB)", f.gpu_name, f.gpu_vram_mb);
+    say!("devices: {}", if f.devices.is_empty() { "(none)".to_owned() } else { f.devices.join(", ") });
 }
 
 /// `detect`: print the facts and the derived values; `--dump` writes the
@@ -88,7 +99,7 @@ pub fn run_detect(file: Option<&Path>, dump: Option<&Path>) -> Result<i32, Strin
     let f = load(file)?.ok_or(NO_FACTS)?;
     print(&f);
     let d = crate::tiers::derive(&f);
-    println!("tier: {:?}", d.tier);
+    say!("tier: {:?}", d.tier);
     d.print();
     if let Some(out) = dump {
         use std::io::Write;
@@ -100,7 +111,7 @@ pub fn run_detect(file: Option<&Path>, dump: Option<&Path>) -> Result<i32, Strin
             }
         })?;
         file.write_all(to_toml(&f).as_bytes()).map_err(|e| format!("{}: {e}", out.display()))?;
-        println!("wrote {}", out.display());
+        say!("wrote {}", out.display());
     }
     Ok(0)
 }
@@ -116,7 +127,7 @@ fn detect() -> Result<Option<Facts>, String> {
     match win::detect() {
         Ok(f) => Ok(Some(f)),
         Err(e) => {
-            eprintln!("notice: device detection failed: {e}");
+            note!("notice: device detection failed: {e}");
             Ok(None)
         }
     }

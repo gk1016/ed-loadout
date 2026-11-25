@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 fn fixture() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/devmachine02")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../fixtures/devmachine02")
 }
 
 fn copy_tree(src: &Path, dst: &Path) {
@@ -255,7 +255,6 @@ fn c3_resolution_falls_back_to_newest_custom_binds() {
 
 /// v0.2 criterion 4: without --devices or --from-log the devices come from
 /// facts; off Windows with no --facts that is exit 3 naming the flag.
-#[cfg(not(windows))]
 #[test]
 fn c3_requires_devices_or_from_log() {
     let (_tmp, opts) = fixture_copy();
@@ -380,8 +379,12 @@ fn c5_apply_crlf_target_keeps_crlf() {
         .replace("<ScreenWidth>5120<", "<ScreenWidth>2560<")
         .replace("<DX11_RefreshRateNumerator>120<", "<DX11_RefreshRateNumerator>60<");
     assert_eq!(fs::read_to_string(target.join("Graphics/DisplaySettings.xml")).unwrap(), expected);
-    // Nothing pre-existed, so nothing was backed up.
-    assert!(!target.join("_loadout-backup").exists());
+    // Nothing pre-existed, so nothing was backed up: the backup folder holds
+    // only the manifest (v0.3: restore uses it to remove what apply added).
+    let stamps: Vec<PathBuf> = fs::read_dir(target.join("_loadout-backup")).unwrap().map(|e| e.unwrap().path()).collect();
+    assert_eq!(stamps.len(), 1, "{stamps:?}");
+    let held: Vec<_> = fs::read_dir(&stamps[0]).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(held, ["manifest.toml"]);
 }
 
 #[test]
@@ -494,8 +497,8 @@ fn v01_c2_apply_ssaa_refuses_when_target_has_a_newer_fxcfg() {
 }
 
 #[test]
-fn v02_c6_version_is_0_2_0() {
-    bin().arg("--version").assert().success().stdout("ed-loadout 0.2.0\n");
+fn v03_c1_version_is_0_3_0() {
+    bin().arg("--version").assert().success().stdout("ed-loadout 0.3.0\n");
 }
 
 /// `<base>/Frontier Developments/Elite Dangerous/Options`, with the
@@ -639,7 +642,7 @@ fn v02_c1_detect_laptop_5090m_is_t2_clamped() {
     assert!(out.contains("derived ssaa = 1.5  (T2 budget 10.0 Mpx over 2560x1600, 1.55 clamped to 1.5;"), "{out}");
     assert!(out.contains("derived terrain_quality = 3  ("), "{out}");
     assert!(out.contains("derived override_tier = t2  ("), "{out}");
-    assert!(out.contains("derived max_fps = 240  ("), "{out}");
+    assert!(out.contains("derived max_fps = 120  ("), "{out}");
 }
 
 #[test]
@@ -666,7 +669,6 @@ fn v02_c1_detect_dump_writes_toml_that_loads_back() {
     bin().arg("detect").arg("--facts").arg(facts_file("devmachine02.toml")).arg("--dump").arg(&dump).assert().code(3);
 }
 
-#[cfg(not(windows))]
 #[test]
 fn v02_c1_detect_without_facts_off_windows_exits_3_naming_the_flag() {
     let err = bin().arg("detect").assert().code(3).get_output().stderr.clone();
@@ -703,7 +705,7 @@ fn v02_c2_apply_laptop_facts_derives_everything() {
     assert_eq!(code, 0, "{out}{err}");
     assert!(out.contains("note: no [machine.fieldlaptop] in profile.toml; using the derived values\n"), "{out}");
     assert!(out.contains("fxcfg target: Graphics/Custom.4.4.fxcfg\n"), "{out}");
-    for line in ["ssaa = 1.5", "terrain_quality = 3", "override_tier = t2", "screen_width = 2560", "max_fps = 240"] {
+    for line in ["ssaa = 1.5", "terrain_quality = 3", "override_tier = t2", "screen_width = 2560", "max_fps = 120"] {
         assert!(out.contains(&format!("effective {line}  (derived)\n")), "{line}\n{out}");
     }
 
@@ -719,7 +721,7 @@ fn v02_c2_apply_laptop_facts_derives_everything() {
         "<ScreenHeight>1600</ScreenHeight>",
         "<DX11_RefreshRateNumerator>240</DX11_RefreshRateNumerator>",
         "<DX11_RefreshRateDenominator>1</DX11_RefreshRateDenominator>",
-        "<MaxFramesPerSecond>240</MaxFramesPerSecond>",
+        "<MaxFramesPerSecond>120</MaxFramesPerSecond>",
         "<LimitFrameRate>true</LimitFrameRate>",
     ] {
         assert!(ds_text.contains(e), "{e}\n{ds_text}");
@@ -746,7 +748,7 @@ fn v02_c2_machine_section_overrides_key_by_key() {
     assert!(out.contains("derived ssaa = 1.5  ("), "{out}");
     assert!(out.contains("effective ssaa = 1.25  ([machine.fieldlaptop])\n"), "{out}");
     assert!(out.contains("effective terrain_quality = 3  (derived)\n"), "{out}");
-    assert!(out.contains("effective max_fps = 240  (derived)\n"), "{out}");
+    assert!(out.contains("effective max_fps = 120  (derived)\n"), "{out}");
     let fx = fs::read_to_string(target.join("Graphics/Custom.4.4.fxcfg")).unwrap();
     assert!(fx.contains("<SSAAMultiplier>1.250000</SSAAMultiplier>"), "{fx}");
     assert!(fx.contains("<TerrainQuality>3</TerrainQuality>"), "{fx}");
@@ -789,7 +791,6 @@ fn v02_c2_unknown_gpu_leaves_the_target_override_alone() {
 
 /// Off Windows only: on Windows, no --facts means the real hardware is
 /// detected and derived values apply (Codex check 3).
-#[cfg(not(windows))]
 #[test]
 fn v02_c2_no_facts_no_machine_applies_as_captured() {
     let (tmp, src) = fixture_copy();
@@ -916,7 +917,6 @@ fn v02_c4_strict_binds_refuses_and_writes_nothing() {
     assert_eq!(code, 0);
 }
 
-#[cfg(not(windows))]
 #[test]
 fn v02_c4_strict_binds_without_facts_exits_3_writing_nothing() {
     let (tmp, src) = fixture_copy();
@@ -930,7 +930,6 @@ fn v02_c4_strict_binds_without_facts_exits_3_writing_nothing() {
     assert!(!target.join("_loadout-backup").exists());
 }
 
-#[cfg(not(windows))]
 #[test]
 fn v02_c4_apply_without_facts_skips_the_binds_check() {
     let (tmp, src) = fixture_copy();

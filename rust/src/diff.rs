@@ -24,11 +24,11 @@ pub fn run(a: &Path, b: &Path) -> Result<i32, String> {
     let mut differ = false;
 
     for rel in fa.difference(&fb) {
-        println!("only in a: {rel}");
+        say!("only in a: {rel}");
         differ = true;
     }
     for rel in fb.difference(&fa) {
-        println!("only in b: {rel}");
+        say!("only in b: {rel}");
         differ = true;
     }
     for rel in fa.intersection(&fb) {
@@ -46,21 +46,20 @@ pub fn run(a: &Path, b: &Path) -> Result<i32, String> {
             if let (Some(ea), Some(eb)) = (flat_elements(&ta), flat_elements(&tb)) {
                 let lines = element_diff(&ea, &eb);
                 if lines.is_empty() {
-                    println!("{rel}: differs outside element values");
+                    say!("{rel}: differs outside element values");
                 }
                 for (name, old, new) in lines {
-                    println!("{rel}: {name} {old} -> {new}");
+                    say!("{rel}: {name} {old} -> {new}");
                 }
                 continue;
             }
-            eprintln!("note: {rel} is not well-formed XML; showing a line diff");
+            note!("note: {rel} is not well-formed XML; showing a line diff");
         }
-        print!(
-            "{}",
-            similar::TextDiff::from_lines(ta.as_ref(), tb.as_ref())
-                .unified_diff()
-                .header(&format!("a/{rel}"), &format!("b/{rel}"))
-        );
+        let unified = similar::TextDiff::from_lines(ta.as_ref(), tb.as_ref())
+            .unified_diff()
+            .header(&format!("a/{rel}"), &format!("b/{rel}"))
+            .to_string();
+        crate::log::out_raw(&unified);
     }
     Ok(if differ { 1 } else { 0 })
 }

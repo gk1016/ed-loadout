@@ -129,6 +129,48 @@ try {
 if (Compare-Object $before (Hashes $opts)) { Fail "something was written while the game was (faked) running" }
 L "debug core: game=true, APPLY disabled, confirm closed, RESTORE refused, Options dir unchanged"
 
+L "--- installer check ---"
+$setup = Join-Path $transfer 'LOADOUT_Setup.exe'
+$inst = Join-Path $env:LOCALAPPDATA 'LOADOUT'
+$unins = Join-Path $inst 'unins000.exe'
+if (Test-Path $unins) {
+    # A real install is the user's: never installed over, never uninstalled.
+    L "installer check SKIPPED: LOADOUT is already installed in $inst (left alone)"
+} else {
+    $i = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -PassThru
+    if (-not $i.WaitForExit(180000)) { $i.Kill(); Fail "the installer did not finish" }
+    if ($i.ExitCode -ne 0) { Fail "the installer exited $($i.ExitCode)" }
+    try {
+        foreach ($f in 'loadout.exe', 'ed-loadout.exe') {
+            if (-not (Test-Path (Join-Path $inst $f))) { Fail "installed: no $f in $inst" }
+            L "installed: $(Join-Path $inst $f) exists"
+        }
+        $lnk = @(Get-ChildItem (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs') -Recurse -Filter 'LOADOUT.lnk' -ErrorAction SilentlyContinue)
+        if ($lnk.Count -lt 1) { Fail "installed: no Start-menu LOADOUT.lnk" }
+        L "installed: Start-menu shortcut $($lnk[0].FullName) exists"
+        # PE optional header: e_lfanew at 0x3C, Subsystem at optional header + 68.
+        $bytes = [IO.File]::ReadAllBytes((Join-Path $inst 'loadout.exe'))
+        $pe = [BitConverter]::ToInt32($bytes, 0x3C)
+        $subsystem = [BitConverter]::ToUInt16($bytes, $pe + 24 + 68)
+        if ($subsystem -ne 2) { Fail "installed: loadout.exe PE Subsystem is $subsystem, not 2 (WINDOWS_GUI)" }
+        L "installed: loadout.exe PE Subsystem = $subsystem (WINDOWS_GUI; 3 would be console)"
+        $ishot = Join-Path $transfer 'loadout-installed-home.png'
+        Remove-Item $ishot -ErrorAction SilentlyContinue
+        $r = Run (Join-Path $inst 'loadout.exe') @('--shot', "`"$ishot`"") 6000
+        Need $r ([regex]::Escape("in " + ($inst -replace '\\', '/'))) "the installed exe did not run from $inst"
+        if (-not (Test-Path $ishot)) { Fail "no capture of the installed exe" }
+        L "installed: HOME capture $ishot"
+    } finally {
+        $u = Start-Process -FilePath $unins -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -PassThru
+        if (-not $u.WaitForExit(120000)) { $u.Kill() }
+        # unins000 hands over to a copy of itself in %TEMP%: wait for the files to go.
+        $t0 = Get-Date
+        while ((Test-Path (Join-Path $inst 'loadout.exe')) -and ((Get-Date) - $t0).TotalSeconds -lt 60) { Start-Sleep -Milliseconds 500 }
+    }
+    if (Test-Path (Join-Path $inst 'loadout.exe')) { Fail "uninstall left loadout.exe in $inst" }
+    L "uninstalled: $inst\loadout.exe is gone"
+}
+
 Remove-Item $scratch -Recurse -Force -ErrorAction SilentlyContinue
 L "=== VERIFY OK (no release) ==="
 exit 0

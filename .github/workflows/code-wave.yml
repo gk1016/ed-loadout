@@ -1,34 +1,43 @@
-# Code, headless, on the WSL runner. One comment from Graham on the lane issue
-# runs a whole wave in the repo's Code checkout (BTS_CODE_CHECKOUT, a clone of
-# its own - never a checkout a cron or a human also uses) with his own Claude
-# subscription (CLAUDE_CODE_OAUTH_TOKEN), no API key, no paste.
+# Code, headless, on the build host. One comment from Graham on the lane issue
+# runs a whole wave in the repo's canonical checkout (BTS_CODE_CHECKOUT) with his
+# own Claude subscription (CLAUDE_CODE_OAUTH_TOKEN), no API key, no paste.
 #
 #   @code build claude/plans/<file>      Execute the plan end to end: branch
 #                                        code/<slug> from main, every criterion,
-#                                        report, draft PR by gk1016. build.yml
-#                                        follows on the PR as for any PR.
-#   @code release ...                    Not on this stack: a rust-only repo's
-#                                        release is its own path (ed-humint: the
-#                                        image cron on merge + the SSM pull by
-#                                        hand). The comment gets a skip line.
+#                                        report, draft PR by gk1016. build.yml +
+#                                        verify-win follow on the PR as for any PR.
+#   @code release beta [v0.1.0-beta.N]   version bump -> the repo's release path
+#                                        (BTS_RELEASE_STEPS) -> prod pull -> the
+#                                        channel's latest URL must serve the tag.
+#   @code release production <tag>       Same on the production channel. Only on
+#                                        Graham's explicit comment (it is).
 #   Flags, anywhere after the command: --model <id> (default from BTS_CODE_MODEL
 #   or claude-opus-5-5).
 #
-# After the Code step: Codex reads `git diff main...HEAD` (read-only, the CI
-# home's login); its findings go in the issue comment.
+# After the Code step: Codex reads `git diff main...HEAD` (WSL codex, read-only,
+# CI home) for a build; its findings go in the issue comment. Carbon is not here:
+# it critiques the beta's survey, once, from the lane issue.
 #
-# Guards, in order: comment author is gk1016; the per-checkout lock (flock on
-# BTS_CODE_CHECKOUT/.code-wave.lock, held through Code + Codex, waits up to
-# 60 min); no tracked edits in the checkout. The checkout is cloned on first use.
+# Guards, in order: comment author is gk1016; the app is not open; no RDP session
+# is Active (an RDP session turns the console into a virtual display - black
+# renderer frames, 2026-11-16); the per-machine desktop lock (shared with
+# verify-win). While a run holds the lock Discord says so; Graham's own Code
+# session must not touch the checkout until the finish line.
 #
-# Repo variables (bts-template README):
-#   BTS_CODE_CHECKOUT        Code's clone on the WSL runner (default /home/gk1016/<repo>-code)
+# Repo variables (bts-template README): every default below is ed-humint-native's
+# value, so a repo that sets none behaves as native did on 2026-11-18.
+#   BTS_CODE_CHECKOUT        canonical checkout on the Windows runner
 #   BTS_CODE_MODEL           default model id
-#   BTS_CODE_BUILD_CMD       how Code builds + tests during a wave (prose for the prompt)
-#   BTS_CODE_FORBIDDEN       what a build wave must never run
+#   BTS_CODE_BUILD_CMD       how Code builds + packages during a wave
+#   BTS_CODE_SURVEY_CMD      the one survey per wave; <slug> is replaced
+#   BTS_CODE_FORBIDDEN       what a build wave must never run (release scripts)
 #   BTS_CODE_DIRTY_IGNORE    regex of tracked paths the build rewrites (not "dirty")
-#   BTS_CODE_SIBLINGS        sibling checkouts the build needs, prose (e.g. ~/coriolis)
-# Linux twin of stacks/win-qt code-wave.yml (2026-11-21, for ed-humint).
+#   BTS_RELEASE_VERSION_FILES where the version string lives (grep hint)
+#   BTS_RELEASE_STEPS        the release path; <tag> <chan> <pullchan> are replaced
+#   BTS_RELEASE_PULL_BASE    prod pull-release.sh channel base (beta = <base>-beta)
+#   BTS_RELEASE_LATEST_BETA / BTS_RELEASE_LATEST_PROD  the latest URLs to verify
+# Plan 2026-11-16: the rebuilt loop (Cowork, ED HUMINT Project thread). Made
+# stack-generic for S-4, 2026-11-18.
 name: code-wave
 
 on:
@@ -40,27 +49,35 @@ jobs:
     if: >-
       github.event_name == 'issue_comment' && !github.event.issue.pull_request &&
       github.event.comment.user.login == 'gk1016' && startsWith(github.event.comment.body, '@code ')
-    runs-on: ${{ fromJSON(vars.BTS_RUNNER_WSL || '["self-hosted","linux","wsl","evo-x2"]') }}
+    # No concurrency group: GitHub keeps ONE pending run per group and cancels the
+    # older one, so '@code release' followed by '@code build' lost the release
+    # (run 44147201144, 2026-11-17). The runner and the desktop lock serialize.
+    runs-on: ${{ fromJSON(vars.BTS_RUNNER_WIN || '["self-hosted","windows","evo-x2"]') }}
     timeout-minutes: 300
-    # contents: write so github.token can push the code/<slug> branch: the CI
-    # home has no gh login of its own (ed-humint waves 1-2 had to improvise an
-    # SSH push; wave 3 failed with 403, 2026-11-21). Known cost: a branch pushed
-    # with github.token does not trigger build.yml on the PR; Code's own
-    # cargo test is the gate, and main builds after the merge.
     permissions:
-      contents: write
+      contents: read
       issues: write
       pull-requests: write
+    defaults:
+      run:
+        shell: powershell
     env:
       REPO: ${{ github.repository }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       ISSUE_N: ${{ github.event.issue.number }}
-      CHECKOUT: ${{ vars.BTS_CODE_CHECKOUT || format('/home/gk1016/{0}-code', github.event.repository.name) }}
+      CHECKOUT: ${{ vars.BTS_CODE_CHECKOUT || 'C:\ED_HUMINT\humint-native' }}
+      APP_EXE: ${{ vars.BTS_APP_EXE }}
+      APP_NAME: ${{ vars.BTS_APP_NAME || vars.BTS_APP_EXE }}
       HOOK: ${{ secrets.DISCORD_WEBHOOK }}
-      BUILD_CMD: ${{ vars.BTS_CODE_BUILD_CMD || 'cargo check, then cargo test --workspace' }}
-      FORBIDDEN: ${{ vars.BTS_CODE_FORBIDDEN || 'any push to main, any deploy or aws/ssm command, any write against a production host' }}
-      DIRTY_IGNORE: ${{ vars.BTS_CODE_DIRTY_IGNORE || 'a^' }}
-      SIBLINGS: ${{ vars.BTS_CODE_SIBLINGS || '' }}
+      BUILD_CMD: ${{ vars.BTS_CODE_BUILD_CMD || 'dev.ps1 package' }}
+      SURVEY_CMD: ${{ vars.BTS_CODE_SURVEY_CMD || 'dev.ps1 survey <slug> -Scope map when every path in git diff --name-only main...HEAD is qml/GalaxyMap.qml, cpp/galaxyview.*, cpp/starinstancing.* or shaders/galaxy_*, otherwise -Scope full' }}
+      FORBIDDEN: ${{ vars.BTS_CODE_FORBIDDEN || 'publish-release.ps1 or dev.ps1 ship' }}
+      DIRTY_IGNORE: ${{ vars.BTS_CODE_DIRTY_IGNORE || 'rust-godot/Cargo\.lock$' }}
+      VERSION_FILES: ${{ vars.BTS_RELEASE_VERSION_FILES || 'rust/Cargo.toml, edhumint.iss' }}
+      RELEASE_STEPS: "${{ vars.BTS_RELEASE_STEPS || 'CLAUDE.md standing-workflow item 5 exactly: dev.ps1 package, verifydist.ps1, publish-release.ps1 <tag> -Channel <chan>, then the prod pull from WSL (the SSM send-command in item 5, channel <pullchan>),' }}"
+      PULL_BASE: ${{ vars.BTS_RELEASE_PULL_BASE || 'desktop' }}
+      LATEST_BETA: ${{ vars.BTS_RELEASE_LATEST_BETA || 'https://edh.tacops.io/api/client/beta/latest' }}
+      LATEST_PROD: ${{ vars.BTS_RELEASE_LATEST_PROD || 'https://edh.tacops.io/api/client/latest' }}
     steps:
       - id: parse
         env:
@@ -68,116 +85,222 @@ jobs:
           BODY: ${{ github.event.comment.body }}
           DEFAULT_MODEL: ${{ vars.BTS_CODE_MODEL || 'claude-opus-5-5' }}
         run: |
-          set -u
-          skip() { echo "skip: $1"; echo "code-wave skip: $1" >> "$GITHUB_STEP_SUMMARY"; echo "go=false" >> "$GITHUB_OUTPUT"; echo "why=$1" >> "$GITHUB_OUTPUT"; exit 0; }
-          first=$(printf '%s' "$BODY" | head -n1 | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-          model="$DEFAULT_MODEL"
-          if [[ "$first" =~ [[:space:]]--model[[:space:]]+([^[:space:]]+) ]]; then model="${BASH_REMATCH[1]}"; first=$(printf '%s' "$first" | sed -E 's/[[:space:]]--model[[:space:]]+[^[:space:]]+//'); fi
-          if [[ "$first" =~ ^@code[[:space:]]+build[[:space:]]+(claude/plans/[A-Za-z0-9._-]+\.md)$ ]]; then
-            kind=build; arg="${BASH_REMATCH[1]}"
-          elif [[ "$first" =~ ^@code[[:space:]]+release ]]; then
-            gh issue comment "$ISSUE_N" --repo "$REPO" --body "code-wave: this repo has no \`@code release\` - its release is its own path (see CLAUDE.md). Got: \`$first\` ($RUN_URL)"
-            skip "release is not on this stack"
-          else
-            skip "usage: '@code build claude/plans/<file>' [--model id]; got: $first"
-          fi
-          [[ "$model" =~ ^[a-z0-9.-]+$ ]] || skip "bad model id: $model"
-          echo "$kind $arg model=$model"
-          { echo "go=true"; echo "kind=$kind"; echo "arg=$arg"; echo "model=$model"; } >> "$GITHUB_OUTPUT"
+          $ErrorActionPreference = 'Continue'
+          function Out-Kv($k, $v) { [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "$k=$v`n") }
+          function Skip($why) { Write-Output "skip: $why"; [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "code-wave skip: $why`n"); Out-Kv go false; exit 0 }
+          $first = ("$env:BODY" -split "`r?`n")[0].Trim()
+          $model = $env:DEFAULT_MODEL
+          if ($first -match '\s--model\s+(\S+)') { $model = $Matches[1]; $first = $first -replace '\s--model\s+\S+', '' }
+          $kind = ''; $arg = ''; $chan = ''
+          if ($first -match '^@code\s+build\s+(claude/plans/[A-Za-z0-9._-]+\.md)$') { $kind = 'build'; $arg = $Matches[1] }
+          elseif ($first -match '^@code\s+release\s+(beta|production)(\s+(v\d+\.\d+\.\d+-beta\.\d+|v\d+\.\d+\.\d+))?$') { $kind = 'release'; $chan = $Matches[1]; $arg = "$($Matches[3])" }
+          else { Skip "usage: '@code build claude/plans/<file>' or '@code release beta|production [tag]' [--model id]; got: $first" }
+          if ($model -cnotmatch '^[a-z0-9.-]+$') { Skip "bad model id: $model" }
+          if ($kind -eq 'release' -and $arg -eq '') {
+            if ($chan -ne 'beta') { Skip 'a production release names its tag' }
+            # Filter in PowerShell: a jq test("...") inside "$( )" loses its quotes (bare '@code release beta' skipped 2026-11-17).
+            # Highest number, not the first row: GitHub lists releases in an order that is not numeric (s4 beta.10 sat after beta.6, 2026-11-19).
+            $tags = @(gh api "repos/$env:REPO/releases?per_page=100" --jq '.[].tag_name')
+            $nums = @($tags | Where-Object { $_ -match '^v0\.1\.0-beta\.[0-9]+$' } | ForEach-Object { [int]($_ -replace '^v0\.1\.0-beta\.', '') })
+            if (-not $nums.Count) { Skip 'cannot derive the next beta tag: no v0.1.0-beta.N release' }
+            $arg = "v0.1.0-beta.$(($nums | Measure-Object -Maximum).Maximum + 1)"
+          }
+          Write-Output "$kind $chan $arg model=$model"
+          Out-Kv go true; Out-Kv kind $kind; Out-Kv arg $arg; Out-Kv chan $chan; Out-Kv model $model
+          exit 0
 
-      # The checkout: cloned once, then fetched. The code step takes a flock on
-      # it for the whole wave (Code + Codex), so two waves on one repo queue.
-      - id: lock
-        name: checkout
+      # The app open, or an RDP session active: skip with a line, never fight it.
+      - id: guard
         if: steps.parse.outputs.go == 'true'
+        run: |
+          $ErrorActionPreference = 'Continue'
+          function Out-Kv($k, $v) { [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "$k=$v`n") }
+          if (-not $env:APP_EXE) { throw "repo variable BTS_APP_EXE is not set" }
+          $open = [bool](Get-Process $env:APP_EXE -ErrorAction SilentlyContinue)
+          $qs = @(query session 2>&1 | ForEach-Object { "$_" })
+          $rdp = [bool]($qs | Where-Object { $_ -match '^\s*>?rdp-tcp#\d+\s+\S+\s+\d+\s+Active' })
+          $why = @()
+          if ($open) { $why += "$env:APP_NAME is open on EVO-X2" }
+          if ($rdp) { $why += 'an RDP session is active (console would be a virtual display)' }
+          if (-not (Test-Path $env:CHECKOUT)) { throw "checkout missing: $env:CHECKOUT" }
+          Write-Output "app open: $open; rdp active: $rdp"
+          Out-Kv blocked $(if ($why.Count) { 'true' } else { 'false' })
+          Out-Kv why ($why -join '; ')
+          exit 0
+
+      - id: skip
+        name: skip notice
+        if: steps.guard.outputs.blocked == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          WHY: ${{ steps.guard.outputs.why }}
+          KIND: ${{ steps.parse.outputs.kind }}
         run: |
-          set -euo pipefail
-          if [ ! -d "$CHECKOUT/.git" ]; then
-            mkdir -p "$(dirname "$CHECKOUT")"
-            git -c credential.helper= -c 'credential.helper=!gh auth git-credential' clone -q "https://github.com/$REPO.git" "$CHECKOUT"
-            echo "cloned $CHECKOUT"
-          fi
-          echo "held=true" >> "$GITHUB_OUTPUT"
+          $ErrorActionPreference = 'Continue'
+          $line = "code-wave $env:KIND not started: $env:WHY. Close it and repeat the comment."
+          gh issue comment $env:ISSUE_N --repo $env:REPO --body "$line ($env:RUN_URL)"
+          if (-not $env:HOOK) { throw "DISCORD_WEBHOOK is empty" }
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          $name = $env:REPO.Split('/')[1]
+          $json = @{ content = (([string][char]0x2192) + " [$name] Decide: $line"); allowed_mentions = @{ parse = @() } } | ConvertTo-Json -Compress
+          try { Invoke-RestMethod -Uri $env:HOOK -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($json)) | Out-Null } catch { throw "discord post failed" }
+          exit 0
+
+      # Same file as verify-win: one desktop, several repos.
+      - id: lock
+        name: desktop lock
+        if: steps.guard.outputs.blocked == 'false'
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $dir = 'C:\actions-runner-locks'; $f = Join-Path $dir 'win-desktop.lock'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $me = "$env:GITHUB_REPOSITORY run $env:GITHUB_RUN_ID"
+          $deadline = (Get-Date).AddMinutes(60)
+          while ($true) {
+            try {
+              $s = [IO.File]::Open($f, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+              $b = [Text.Encoding]::UTF8.GetBytes($me); $s.Write($b, 0, $b.Length); $s.Close()
+              Write-Output "desktop lock taken: $me"; break
+            } catch {
+              $item = Get-Item $f -ErrorAction SilentlyContinue
+              if (-not $item) { continue }
+              $holder = "$(Get-Content $f -Raw -ErrorAction SilentlyContinue)".Trim()
+              if (((Get-Date) - $item.LastWriteTime).TotalMinutes -gt 320) { Remove-Item $f -Force -ErrorAction SilentlyContinue; continue }
+              if ((Get-Date) -gt $deadline) { throw "desktop busy for 60 min: $holder" }
+              Write-Output "desktop busy: $holder; waiting"; Start-Sleep -Seconds 30
+            }
+          }
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "held=true`n")
+          exit 0
 
       - id: start
         name: start notice
         if: steps.lock.outputs.held == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          KIND: ${{ steps.parse.outputs.kind }}
           ARG: ${{ steps.parse.outputs.arg }}
+          CHAN: ${{ steps.parse.outputs.chan }}
           MODEL: ${{ steps.parse.outputs.model }}
         run: |
-          set -u
-          gh issue comment "$ISSUE_N" --repo "$REPO" --body "code-wave started: build $ARG ($MODEL) in \`$CHECKOUT\` on the WSL runner. It queues behind any wave already on that checkout and holds it until the finish line. $RUN_URL"
-          if [ -n "$HOOK" ]; then
-            name=${REPO#*/}
-            jq -nc --arg c "→ [$name] Code: build $ARG started on the WSL runner" '{content:$c, allowed_mentions:{parse:[]}}' | curl -sS -o /dev/null -H 'Content-Type: application/json' -d @- "$HOOK" || echo "warning: discord post failed"
-          fi
+          $ErrorActionPreference = 'Continue'
+          $what = if ($env:KIND -eq 'build') { "build $env:ARG" } else { "release $env:CHAN $env:ARG".Trim() }
+          gh issue comment $env:ISSUE_N --repo $env:REPO --body "code-wave started: $what ($env:MODEL) in ``$env:CHECKOUT``. The checkout and the desktop are busy until the finish line. $env:RUN_URL"
+          if ($env:HOOK) {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $name = $env:REPO.Split('/')[1]
+            $json = @{ content = (([string][char]0x2192) + " [$name] Code: $what started - EVO-X2 busy, RDP stays closed"); allowed_mentions = @{ parse = @() } } | ConvertTo-Json -Compress
+            try { Invoke-RestMethod -Uri $env:HOOK -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($json)) | Out-Null } catch { Write-Output "warning: discord post failed" }
+          }
+          exit 0
 
-      # The CLI, once per CI home, under the CI home's own npm prefix (the box's
-      # global prefix is /usr). Never an API key.
+      # The CLI, once per box; the box's own npm. Never an API key: the step
+      # below authenticates with the subscription token only.
       - id: cli
         name: claude cli
         if: steps.lock.outputs.held == 'true'
         run: |
-          set -u
-          export PATH="$HOME/.npm-global/bin:$PATH"
-          if ! command -v claude >/dev/null 2>&1; then
-            npm install -g --prefix "$HOME/.npm-global" @anthropic-ai/claude-code 2>&1 | tail -n 2
-          fi
-          command -v claude >/dev/null 2>&1 || { echo "claude cli not installed"; exit 1; }
-          echo "claude $(claude --version 2>/dev/null)"
-          echo "bin=$HOME/.npm-global/bin" >> "$GITHUB_OUTPUT"
+          $ErrorActionPreference = 'Continue'
+          $npmBin = Join-Path $env:APPDATA 'npm'
+          $env:PATH = "$npmBin;$env:PATH"
+          $v = (& claude --version 2>$null) -join ''
+          if (-not $v) { npm install -g @anthropic-ai/claude-code 2>&1 | Select-Object -Last 2; $v = (& claude --version 2>$null) -join '' }
+          if (-not $v) { throw "claude cli not installed" }
+          Write-Output "claude $v"
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "bin=$npmBin`n")
+          exit 0
 
       - id: code
         name: code
         if: steps.lock.outputs.held == 'true'
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          GH_TOKEN: ${{ github.token }}
+          KIND: ${{ steps.parse.outputs.kind }}
           ARG: ${{ steps.parse.outputs.arg }}
+          CHAN: ${{ steps.parse.outputs.chan }}
           MODEL: ${{ steps.parse.outputs.model }}
           NPM_BIN: ${{ steps.cli.outputs.bin }}
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: |
-          set -u
-          [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] || { echo "secret CLAUDE_CODE_OAUTH_TOKEN is not set"; exit 1; }
-          unset ANTHROPIC_API_KEY
-          export PATH="$NPM_BIN:${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
-          cd "$CHECKOUT"
-          exec 9>"$CHECKOUT/.code-wave.lock"
-          flock -w 3600 9 || { echo "checkout busy for 60 min"; exit 1; }
-          git config user.name  >/dev/null || git config user.name gk1016
-          git config user.email >/dev/null || git config user.email 44751853+gk1016@users.noreply.github.com
-          git config credential.helper '!gh auth git-credential'
-          dirty=$(git status --porcelain --untracked-files=no | grep -Ev "$DIRTY_IGNORE" || true)
-          if [ -n "$dirty" ]; then printf 'checkout has tracked edits; a human left work here:\n%s\n' "$dirty"; exit 1; fi
-          git fetch -q origin || { echo "git fetch failed"; exit 1; }
-          logs="$RUNNER_TEMP/logs"; mkdir -p "$logs"
-          git checkout -q main && git pull -q --ff-only origin main || { echo "pull main failed"; exit 1; }
-          slug=$(basename "$ARG" .md | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}-//')
-          branch="code/$slug"
-          if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then echo "$branch already exists on origin; finish or delete it first"; exit 1; fi
-          git checkout -q -b "$branch"
-          sib=""; [ -n "$SIBLINGS" ] && sib=" Sibling checkouts the build needs: $SIBLINGS."
-          prompt="You are Claude Code running headless on the EVO-X2 WSL, the sole build host, in $CHECKOUT on branch $branch (cut from main just now). There is nobody at the keyboard. This checkout is yours alone; never touch any other checkout of this repo on this machine.$sib Execute $ARG under CLAUDE.md's Execution role, with these changes to it: no interactive Plan-mode approval - read every file the plan names first, and if the plan contradicts the code, say so in the PR body and take the smallest faithful reading; the whole plan is yours (every criterion: Rust, SPA, migrations, scripts, docs); one commit per criterion referencing the plan filename; build and test with $BUILD_CMD; run the plan's verification (a local engine stood up as CLAUDE.md says, never production); never run $FORBIDDEN; never push main. When done: run the full test suite, push this branch, write claude/reports/<plan filename> and commit it here, then open a DRAFT PR against main with gh pr create --draft (title from the plan's first heading; body: criteria met with evidence, not met and why, deviations, needs-Graham items; no Closes line - the lane issue stays open) and print the PR URL on the last line as PR_URL=<url>. If a stop-and-ask condition in the plan is hit, stop, commit what is sound, open the draft PR anyway with a '## Stopped' section naming the question, and print PR_URL. Tear down any local engine you started. Never print a secret."
-          printf '%s' "$prompt" > "$logs/prompt.txt"
-          echo "running claude ($MODEL) in $CHECKOUT"
-          set +e
-          claude -p "$prompt" --model "$MODEL" --dangerously-skip-permissions --output-format text 2>&1 | tee "$logs/code.out.log" | tail -n 40
-          rc=${PIPESTATUS[0]}
-          set -e
-          pr=$(grep -Eo 'PR_URL=https://github\.com/[^ ]+/pull/[0-9]+' "$logs/code.out.log" | tail -n1 | cut -d= -f2- || true)
-          { echo "rc=$rc"; echo "pr=$pr"; echo "logs=$logs"; } >> "$GITHUB_OUTPUT"
-          # Adversarial read of the diff, read-only, the CI home's codex login, same brief as the Action.
-          out="/tmp/codex-check-$GITHUB_RUN_ID.md"
-          codex exec --sandbox read-only --ephemeral -o "$out" 'Follow claude/review/codex-adversarial.md. The change is git diff main...HEAD.' >/dev/null 2>&1 || true
-          txt=$(cat "$out" 2>/dev/null || true)
-          [ -n "$(printf '%s' "$txt" | tr -d '[:space:]')" ] || txt='codex produced no output'
-          printf '%s' "$txt" > "$logs/codex-check.md"
-          printf '%s' "$txt" | head -c 2000; echo
-          if [ -z "$pr" ]; then echo "code finished (rc $rc) without a PR_URL line"; exit 1; fi
+          $ErrorActionPreference = 'Continue'
+          if (-not $env:CLAUDE_CODE_OAUTH_TOKEN) { throw "secret CLAUDE_CODE_OAUTH_TOKEN is not set" }
+          if ($env:ANTHROPIC_API_KEY) { Remove-Item Env:ANTHROPIC_API_KEY }
+          $env:PATH = "$env:NPM_BIN;$env:PATH"
+          Set-Location $env:CHECKOUT
+          # Tracked edits block (a human's half-done work); untracked scratch dirs and the
+          # files the build itself rewrites (BTS_CODE_DIRTY_IGNORE) do not.
+          $dirty = @(git status --porcelain --untracked-files=no | Where-Object { $_ -and $_ -notmatch $env:DIRTY_IGNORE })
+          if ($dirty.Count) { throw "checkout has tracked edits; a human left work here:`n$($dirty -join "`n")" }
+          git fetch -q origin; if ($LASTEXITCODE -ne 0) { throw "git fetch failed" }
+          $logs = Join-Path $env:RUNNER_TEMP 'logs'; New-Item -ItemType Directory -Force -Path $logs | Out-Null
+          if ($env:KIND -eq 'build') {
+            git checkout -q main; git -c core.safecrlf=false pull -q --ff-only origin main; if ($LASTEXITCODE -ne 0) { throw "pull main failed" }
+            $slug = [IO.Path]::GetFileNameWithoutExtension($env:ARG) -replace '^\d{4}-\d{2}-\d{2}-', ''
+            $branch = "code/$slug"
+            if (git ls-remote --exit-code --heads origin $branch) { throw "$branch already exists on origin; finish or delete it first" }
+            git checkout -q -b $branch
+            $survey = $env:SURVEY_CMD -replace '<slug>', $slug
+            $prompt = @(
+              "You are Claude Code running headless on the EVO-X2, the sole build host, in $env:CHECKOUT on branch $branch (cut from main just now). There is nobody at the keyboard.",
+              "Execute $env:ARG under CLAUDE.md's Execution role, with these changes to it: no interactive Plan-mode approval - read every file the plan names first, and if the plan contradicts the code, say so in the PR body and take the smallest faithful reading;",
+              "the whole plan is yours (every S and N criterion: Rust, C++, QML, scripts, docs); one commit per criterion referencing the plan filename; build with $env:BUILD_CMD, run the plan's verification, never leave the app running, never run $env:FORBIDDEN, never push main.",
+              "Survey once per wave: after the last commit that changes anything outside claude/** and *.md, run $survey; that one survey is the report's evidence and verify-win's.",
+              "Before the PR, write that head (git rev-parse HEAD) to _shots/uipass/survey-$slug/SURVEY_SHA and push the folder alone as ui/survey-$slug (a detached worktree off origin/main, git add -f, force-push to that branch); after it commit only claude/** or *.md, or verify-win surveys again.",
+              "When done: run the full test suite, push this branch (and any sibling repo the plan changed, after its own tests), write claude/reports/<plan filename> and commit it here, then open a DRAFT PR against main with gh pr create --draft",
+              "(title from the plan's first heading; body: criteria met with evidence, not met and why, deviations, needs-Graham items; no Closes line - the lane issue stays open) and print the PR URL on the last line as PR_URL=<url>.",
+              "If a stop-and-ask condition in the plan is hit, stop, commit what is sound, open the draft PR anyway with a '## Stopped' section naming the question, and print PR_URL. Never print a secret."
+            ) -join ' '
+          } else {
+            git checkout -q main; git -c core.safecrlf=false pull -q --ff-only origin main; if ($LASTEXITCODE -ne 0) { throw "pull main failed" }
+            $tag = $env:ARG
+            $sha = (git rev-parse --short HEAD).Trim()
+            $tagLine = "as $tag"
+            $pullChan = if ($env:CHAN -eq 'beta') { "$env:PULL_BASE-beta" } else { $env:PULL_BASE }
+            $latest = if ($env:CHAN -eq 'beta') { $env:LATEST_BETA } else { $env:LATEST_PROD }
+            $steps = $env:RELEASE_STEPS -replace '<tag>', $tag -replace '<chan>', $env:CHAN -replace '<pullchan>', $pullChan
+            $prompt = @(
+              "You are Claude Code running headless on the EVO-X2, the sole build host, in $env:CHECKOUT on main at $sha, freshly pulled. There is nobody at the keyboard.",
+              "Graham has explicitly instructed this release on the $env:CHAN channel $tagLine.",
+              "First the version bump that every release carries: set the version to $($tag.TrimStart('v')) wherever the current version string lives ($env:VERSION_FILES, and whatever else the release scripts or the self-update manifest read - grep for the current value first), commit it as 'release: $tag' and push main. That bump commit is the ONLY change to main this run may make.",
+              "Then $steps",
+              "then verify with curl that $latest returns the tag and the tag's manifest returns 200.",
+              "No other source changes; no commits beyond the bump and whatever the release scripts make themselves. If the bump is already on main, do not repeat it.",
+              "Finish with a short report: tag, installer name in the Drive folder, what dist\ holds, the latest URL's response; last line RELEASE=$tag on success or RELEASE=FAILED <why>. Never print a secret."
+            ) -join ' '
+          }
+          [IO.File]::WriteAllText((Join-Path $logs 'prompt.txt'), $prompt, (New-Object Text.UTF8Encoding $false))
+          Write-Output "running claude ($env:MODEL) in $env:CHECKOUT"
+          & claude -p $prompt --model $env:MODEL --dangerously-skip-permissions --output-format text 2>&1 |
+            ForEach-Object { "$_" } | Tee-Object -FilePath (Join-Path $logs 'code.out.log') | Select-Object -Last 40
+          $rc = $LASTEXITCODE
+          $out = Get-Content (Join-Path $logs 'code.out.log') -Raw -ErrorAction SilentlyContinue
+          $pr = ''; $rel = ''
+          if ($out -match 'PR_URL=(https://github\.com/\S+/pull/\d+)') { $pr = $Matches[1] }
+          if ($out -match '(?m)^.*RELEASE=(\S.*)$') { $rel = $Matches[1].Trim() }
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "rc=$rc`npr=$pr`nrelease=$rel`nlogs=$logs`n")
+          if ($env:KIND -eq 'build' -and -not $pr) { throw "code finished (rc $rc) without a PR_URL line" }
+          if ($env:KIND -eq 'release' -and ($rel -eq '' -or $rel.StartsWith('FAILED'))) { throw "release did not complete: $rel (rc $rc)" }
+          exit 0
+
+      # Adversarial read of the diff, read-only, from WSL with the CI home's
+      # codex login; the same prompt file the Action uses.
+      - id: codex
+        name: codex check
+        if: steps.lock.outputs.held == 'true' && steps.parse.outputs.kind == 'build'
+        env:
+          LOGS: ${{ steps.code.outputs.logs }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $drive = $env:CHECKOUT.Substring(0, 1).ToLower()
+          $win = "/mnt/$drive" + ($env:CHECKOUT.Substring(2) -replace '\\', '/')
+          $outWsl = '/tmp/codex-check-' + $env:GITHUB_RUN_ID + '.md'
+          $cmd = "cd '$win' && HOME=/home/gk1016/ci-home codex exec --sandbox read-only --ephemeral -o $outWsl 'Follow claude/review/codex-adversarial.md. The change is git diff main...HEAD.' >/dev/null 2>&1; cat $outWsl"
+          $txt = (wsl.exe -e bash -lc $cmd 2>&1) -join "`n"
+          if (-not $txt.Trim()) { $txt = 'codex produced no output' }
+          [IO.File]::WriteAllText((Join-Path $env:LOGS 'codex-check.md'), $txt, (New-Object Text.UTF8Encoding $false))
+          Write-Output ($txt.Substring(0, [Math]::Min(2000, $txt.Length)))
+          exit 0
 
       - if: always() && steps.code.outputs.logs != ''
         uses: actions/upload-artifact@v4
@@ -191,24 +314,54 @@ jobs:
         if: always() && steps.lock.outputs.held == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          KIND: ${{ steps.parse.outputs.kind }}
           ARG: ${{ steps.parse.outputs.arg }}
+          CHAN: ${{ steps.parse.outputs.chan }}
           PR: ${{ steps.code.outputs.pr }}
+          REL: ${{ steps.code.outputs.release }}
           LOGS: ${{ steps.code.outputs.logs }}
           O_CODE: ${{ steps.code.outcome }}
           O_CLI: ${{ steps.cli.outcome }}
         run: |
-          set -u
-          name=${REPO#*/}
-          tail=""; codex=""
-          if [ -n "$LOGS" ] && [ -f "$LOGS/code.out.log" ]; then tail=$(tail -c 6000 "$LOGS/code.out.log" | sed -E 's/(gho_|sk-ant-|AQ\.)[A-Za-z0-9_.-]+/\1***/g'); fi
-          if [ -n "$LOGS" ] && [ -f "$LOGS/codex-check.md" ]; then codex=$(head -c 8000 "$LOGS/codex-check.md"); fi
-          if [ "$O_CODE" = success ]; then head="**code-wave build done**: $ARG -> $PR (draft; build follows)"; disc="Code: PR ready for review - $PR"
-          else at=code; [ "$O_CLI" = success ] || at="claude cli"; head="**code-wave build failed** at $at: $ARG"; disc="Look: code-wave build failed - $RUN_URL"; fi
-          f="$RUNNER_TEMP/code-wave-finish.md"
-          { echo "$head"; echo; echo "Run: $RUN_URL (artifact \`code-wave-logs\`: prompt, transcript, codex)";
-            [ -z "$codex" ] || { echo; echo "## Codex check"; echo "$codex"; }
-            [ -z "$tail" ] || { echo; echo "<details><summary>Code transcript (tail)</summary>"; echo; echo '```'; echo "$tail"; echo '```'; echo "</details>"; }; } > "$f"
-          gh issue comment "$ISSUE_N" --repo "$REPO" --body-file "$f"
-          if [ -n "$HOOK" ]; then
-            jq -nc --arg c "→ [$name] $disc" '{content:$c, allowed_mentions:{parse:[]}}' | curl -sS -o /dev/null -H 'Content-Type: application/json' -d @- "$HOOK" || echo "warning: discord post failed"
-          fi
+          $ErrorActionPreference = 'Continue'
+          $name = $env:REPO.Split('/')[1]
+          $ok = $env:O_CODE -eq 'success'
+          $tail = ''
+          if ($env:LOGS -and (Test-Path (Join-Path $env:LOGS 'code.out.log'))) {
+            $t = Get-Content (Join-Path $env:LOGS 'code.out.log') -Raw
+            if ($t.Length -gt 6000) { $t = $t.Substring($t.Length - 6000) }
+            $tail = $t -replace '(gho_|sk-ant-|AQ\.)[A-Za-z0-9_\-\.]+', '$1***'
+          }
+          $codex = ''
+          if ($env:LOGS -and (Test-Path (Join-Path $env:LOGS 'codex-check.md'))) {
+            $codex = Get-Content (Join-Path $env:LOGS 'codex-check.md') -Raw
+            if ($codex.Length -gt 8000) { $codex = $codex.Substring(0, 8000) + "`n...(truncated; full text in the run artifact)" }
+          }
+          if ($env:KIND -eq 'build') {
+            $head = if ($ok) { "**code-wave build done**: $env:ARG -> $env:PR (draft; build + verify-win follow)" } else { "**code-wave build failed** at $(if ($env:O_CLI -ne 'success') { 'claude cli' } else { 'code' }): $env:ARG" }
+            $disc = if ($ok) { "Code: PR ready for review - $env:PR" } else { "Look: code-wave build failed - $env:RUN_URL" }
+          } else {
+            $head = if ($ok) { "**code-wave release done**: $env:REL on $env:CHAN" } else { "**code-wave release failed**: $env:CHAN $env:ARG - $env:REL" }
+            $disc = if ($ok) { "Beta ready: $env:REL on the $env:CHAN channel - the app's self-update picks it up; installer in the Drive builds folder" } else { "Look: release failed - $env:RUN_URL" }
+          }
+          $body = @($head, '', "Run: $env:RUN_URL (artifact ``code-wave-logs``: prompt, transcript, codex)")
+          if ($codex) { $body += @('', '## Codex check', $codex) }
+          if ($tail) { $body += @('', '<details><summary>Code transcript (tail)</summary>', '', '```', $tail, '```', '</details>') }
+          $f = Join-Path $env:RUNNER_TEMP 'code-wave-finish.md'
+          [IO.File]::WriteAllText($f, ($body -join "`n"), (New-Object Text.UTF8Encoding $false))
+          gh issue comment $env:ISSUE_N --repo $env:REPO --body-file $f
+          if ($env:HOOK) {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $json = @{ content = (([string][char]0x2192) + " [$name] $disc"); allowed_mentions = @{ parse = @() } } | ConvertTo-Json -Compress
+            try { Invoke-RestMethod -Uri $env:HOOK -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($json)) | Out-Null } catch { Write-Output "warning: discord post failed" }
+          }
+          exit 0
+
+      - name: desktop unlock
+        if: always() && steps.lock.outputs.held == 'true'
+        run: |
+          $f = 'C:\actions-runner-locks\win-desktop.lock'
+          $me = "$env:GITHUB_REPOSITORY run $env:GITHUB_RUN_ID"
+          $holder = "$(Get-Content $f -Raw -ErrorAction SilentlyContinue)".Trim()
+          if ($holder -eq $me) { Remove-Item $f -Force; Write-Output "desktop lock released: $me" } else { Write-Output "lock is not ours ($holder); left alone" }
+          exit 0

@@ -1,11 +1,16 @@
-# cargo test on every push and PR, on the repo's WSL runner (x2-<repo>-wsl,
-# shared CI HOME, CARGO_HOME/RUSTUP_HOME = gk1016's toolchain). No release.
+# The repo's build on every push and PR, on EVO-X2's Windows host (the repo's
+# x2-<repo>-win runner, a logon task under Graham's account, so MSVC, Qt, cargo
+# and the HUMINT_* env match an interactive build). No package, no ship, no
+# release.
 # Repo variables (set by bts-repo-init):
-#   BTS_RUNNER_WSL       runner labels, JSON list (default below)
-#   BTS_CARGO_MANIFEST   Cargo.toml path, repo-relative (default Cargo.toml)
-# From gk1016/bts-template stacks/rust-only (frago plan 2026-11-14-pipeline-v2 C4).
-# ed-loadout addition (Cowork 2026-11-21): cargo check for the Windows target so
-# cfg(windows) paths compile on every PR; the runner has mingw-w64 + the target.
+#   BTS_RUNNER_WIN    runner labels, JSON list (default below)
+#   BTS_BUILD_SCRIPT  PowerShell, run from the repo root (e.g. .\build.ps1)
+#   BTS_BUILD_OK      the pass line, matched literally
+#   BTS_BUILD_LOG     file the pass line is in, repo-relative; empty = the
+#                     script's own output
+# TEMP/TMP point at the job's temp folder: the runner is Graham's user, so a
+# build must not touch anything his own sessions parked in %TEMP%.
+# From gk1016/bts-template stacks/win-qt (frago plan 2026-11-14-pipeline-v2 C4).
 name: build
 
 on:
@@ -18,29 +23,46 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ${{ fromJSON(vars.BTS_RUNNER_WSL || '["self-hosted","linux","wsl","evo-x2"]') }}
-    timeout-minutes: 45
+    runs-on: ${{ fromJSON(vars.BTS_RUNNER_WIN || '["self-hosted","windows","evo-x2"]') }}
+    timeout-minutes: 60
     # Explicit: the repo default is read+write (bts-repo-init), and this job
     # runs the pushed code.
     permissions:
       contents: read
-    env:
-      MANIFEST: ${{ vars.BTS_CARGO_MANIFEST || 'Cargo.toml' }}
+    defaults:
+      run:
+        shell: powershell
     steps:
       - uses: actions/checkout@v4
 
-      - name: cargo test
+      - name: build
+        env:
+          SCRIPT: ${{ vars.BTS_BUILD_SCRIPT }}
+          OK: ${{ vars.BTS_BUILD_OK }}
+          LOG: ${{ vars.BTS_BUILD_LOG }}
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: |
-          set -euo pipefail
-          export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
-          cargo --version
-          cargo test --manifest-path "$MANIFEST" 2>&1 | tee cargo-test.log
-          cargo check --manifest-path "$MANIFEST" --target x86_64-pc-windows-gnu 2>&1 | tee -a cargo-test.log
+          $ErrorActionPreference = 'Continue'
+          if (-not $env:SCRIPT -or -not $env:OK) { throw "repo variables BTS_BUILD_SCRIPT and BTS_BUILD_OK must be set" }
+          $d = Join-Path $env:GITHUB_WORKSPACE '_logs'
+          New-Item -ItemType Directory -Force -Path $d | Out-Null
+          $f = Join-Path $env:RUNNER_TEMP 'bts-build.ps1'
+          [IO.File]::WriteAllText($f, $env:SCRIPT, (New-Object Text.UTF8Encoding $true))
+          powershell -NoProfile -ExecutionPolicy Bypass -File $f 2>&1 | ForEach-Object { "$_" } | Tee-Object -Variable out | Select-Object -Last 20
+          $own = Join-Path $d 'build.out.log'
+          [IO.File]::WriteAllLines($own, [string[]]@($out))
+          $where = if ($env:LOG) { Join-Path $env:GITHUB_WORKSPACE $env:LOG } else { $own }
+          if ($env:LOG -and (Test-Path $where)) { Copy-Item $where $d -Force }
+          if (-not ((Test-Path $where) -and (Select-String -Path $where -Pattern $env:OK -SimpleMatch -Quiet))) {
+            throw "no '$env:OK' line in $where"
+          }
+          exit 0
 
-      - name: cargo-test.log
+      - name: logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: cargo-test-log
-          path: cargo-test.log
+          name: build-logs
+          path: _logs/
           if-no-files-found: warn

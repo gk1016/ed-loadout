@@ -15,8 +15,9 @@ Popup {
     // Files actually written: new or with different bytes. "Same bytes" rows are not writes.
     readonly property int writes: files.filter(function (f) { return !f.exists || f.changed }).length
     readonly property int unchanged: files.length - writes
-    readonly property string headline: writes + (writes === 1 ? " file" : " files") + " will be written"
-                                        + (unchanged > 0 ? ", " + unchanged + " unchanged" : "")
+    // apply writes every planned file (rust/src/apply.rs), so the count is files.length.
+    readonly property string headline: files.length + (files.length === 1 ? " file" : " files") + " will be written"
+                                        + (writes < files.length ? ", " + writes + (writes === 1 ? " changes" : " change") + " content" : "")
     function accept() { sheet.close(); sheet.accepted() }
 
     modal: true
@@ -27,7 +28,7 @@ Popup {
     padding: 0
     // A docked sheet: hairline, radius 2, no shadow.
     background: Rectangle { color: Theme.pane; radius: Theme.radius; border.width: 1; border.color: Theme.ruleHi }
-    Overlay.modal: Rectangle { color: Theme.light ? Qt.rgba(0.04, 0.06, 0.12, 0.6) : Qt.rgba(0, 0, 0, 0.75) }
+    Overlay.modal: Rectangle { color: Theme.light ? Qt.rgba(0.04, 0.06, 0.12, 0.85) : Qt.rgba(0, 0, 0, 0.75) }
 
     component Rule: Rectangle { width: parent ? parent.width : 0; height: 1; color: Theme.rule }
     component Cell: Text {

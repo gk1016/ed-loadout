@@ -34,6 +34,15 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
+      # The runner's _work checkout may predate .gitattributes (fixtures/** and
+      # rust/tiers/** are -text); a forced checkout does not rewrite files whose
+      # index entry already matches, so re-check them out (OBS-019).
+      - name: renormalize fixtures
+        run: |
+          git rm -q --cached -r fixtures rust/tiers
+          git checkout -- fixtures rust/tiers
+          git status --short | Select-Object -First 5
+
       - name: version matches tag
         run: |
           $ErrorActionPreference = 'Stop'

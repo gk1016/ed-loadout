@@ -77,10 +77,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $ErrorActionPreference = 'Stop'
+          # Continue: with Stop, gh's stderr ("release not found") is a terminating error.
+          $ErrorActionPreference = 'Continue'
           $gh = (Get-Command gh -ErrorAction SilentlyContinue).Source
           if (-not $gh) { $gh = 'C:\Program Files\GitHub CLI\gh.exe' }
-          & $gh release view $env:TAG 2>$null | Out-Null
+          & $gh release view $env:TAG 2>&1 | Out-Null
           if ($LASTEXITCODE -eq 0) {
             & $gh release upload $env:TAG dist\LOADOUT_Setup.exe dist\SHA256SUMS.txt --clobber
           } else {

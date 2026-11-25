@@ -110,7 +110,7 @@ Popup {
                 required property var modelData
                 width: sheet.width - 2
                 height: Theme.row
-                Kicker { x: 10; width: 240; height: parent.height; text: "BOUND DEVICE NOT CONNECTED"; color: Theme.crit }
+                Kicker { x: 10; width: 240; height: parent.height; text: "BOUND DEVICE NOT CONNECTED"; color: Theme.warn }
                 Text {
                     x: 250
                     height: parent.height
@@ -118,7 +118,7 @@ Popup {
                     text: miss.modelData.guid + "   " + miss.modelData.bindings + (miss.modelData.bindings === 1 ? " binding" : " bindings")
                     font.family: Theme.mono
                     font.pixelSize: Theme.fData
-                    color: Theme.crit
+                    color: Theme.warn
                 }
                 Rule { anchors.bottom: parent.bottom }
             }

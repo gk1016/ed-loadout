@@ -33,7 +33,7 @@ Popup {
     component Cell: Text {
         height: parent ? parent.height : 0
         verticalAlignment: Text.AlignVCenter
-        elide: Text.ElideMiddle
+        elide: Text.ElideLeft
         font.family: Theme.mono
         font.pixelSize: Theme.fData
         color: Theme.ink
@@ -51,7 +51,7 @@ Popup {
             height: parent.height
             verticalAlignment: Text.AlignVCenter
             text: pair.value
-            elide: Text.ElideMiddle
+            elide: Text.ElideLeft
             font.family: Theme.mono
             font.pixelSize: Theme.fData
             color: Theme.ink

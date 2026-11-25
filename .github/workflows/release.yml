@@ -39,9 +39,13 @@ jobs:
       # index entry already matches, so re-check them out (OBS-019).
       - name: renormalize fixtures
         run: |
-          git rm -q --cached -r fixtures rust/tiers
-          git checkout -- fixtures rust/tiers
-          git status --short | Select-Object -First 5
+          $ErrorActionPreference = 'Stop'
+          Remove-Item -Recurse -Force fixtures, rust\tiers
+          git checkout HEAD -- fixtures rust/tiers
+          if (git status --short -- fixtures rust/tiers) { throw "fixtures still differ after re-checkout" }
+          $b = [IO.File]::ReadAllBytes("fixtures\devmachine02\Graphics\Custom.4.4.fxcfg")
+          if ([Array]::IndexOf($b, [byte]13) -ge 0) { throw "fixture still has CR bytes" }
+          Write-Output "fixtures LF, index clean"
 
       - name: version matches tag
         run: |

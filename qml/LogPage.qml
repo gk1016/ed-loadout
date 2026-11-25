@@ -30,7 +30,11 @@ Rectangle {
             clip: true
             boundsBehavior: Flickable.StopAtBounds
             model: Core.log
-            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            // Always shown when the lines overflow: a log is read by scrolling.
+            ScrollBar.vertical: ScrollBar {
+                policy: list.contentHeight > list.height ? ScrollBar.AlwaysOn : ScrollBar.AlwaysOff
+                contentItem: Rectangle { implicitWidth: 6; color: Theme.ruleHi; radius: 0 }
+            }
             onCountChanged: Qt.callLater(list.positionViewAtEnd)
             delegate: Rectangle {
                 id: row

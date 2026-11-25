@@ -253,7 +253,7 @@ Rectangle {
                             required property var modelData
                             width: body.width
                             height: Theme.row
-                            Kicker { x: 10; width: 240; height: parent.height; text: "BOUND DEVICE NOT CONNECTED"; color: Theme.crit }
+                            Kicker { x: 10; width: 240; height: parent.height; text: "BOUND DEVICE NOT CONNECTED"; color: Theme.warn }
                             Text {
                                 x: 250
                                 width: parent.width - x - 10
@@ -262,7 +262,7 @@ Rectangle {
                                 text: u.modelData.guid + "   " + u.modelData.bindings + (u.modelData.bindings === 1 ? " binding" : " bindings")
                                 font.family: Theme.mono
                                 font.pixelSize: Theme.fData
-                                color: Theme.crit
+                                color: Theme.warn
                             }
                             Rule { anchors.bottom: parent.bottom }
                         }

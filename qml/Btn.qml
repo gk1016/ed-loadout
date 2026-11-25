@@ -14,7 +14,7 @@ Rectangle {
     implicitHeight: Theme.row
     radius: Theme.radius
     // Disabled is its own flat state, not a faded copy of the live one.
-    color: !live ? Theme.pane
+    color: !live ? "transparent"
          : primary ? (ma.containsMouse ? Theme.sandHi : Theme.sand)
                    : (ma.containsMouse ? Theme.hover(0.07) : "transparent")
     border.width: primary && live ? 0 : 1

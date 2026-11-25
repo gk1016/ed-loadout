@@ -167,7 +167,7 @@ pub fn derive(f: &Facts) -> Derived {
 impl Derived {
     pub fn print(&self) {
         for (key, value, reason) in &self.lines {
-            println!("derived {key} = {value}  ({reason})");
+            say!("derived {key} = {value}  ({reason})");
         }
     }
 }

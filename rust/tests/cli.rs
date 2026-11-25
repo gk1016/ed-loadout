@@ -379,8 +379,12 @@ fn c5_apply_crlf_target_keeps_crlf() {
         .replace("<ScreenWidth>5120<", "<ScreenWidth>2560<")
         .replace("<DX11_RefreshRateNumerator>120<", "<DX11_RefreshRateNumerator>60<");
     assert_eq!(fs::read_to_string(target.join("Graphics/DisplaySettings.xml")).unwrap(), expected);
-    // Nothing pre-existed, so nothing was backed up.
-    assert!(!target.join("_loadout-backup").exists());
+    // Nothing pre-existed, so nothing was backed up: the backup folder holds
+    // only the manifest (v0.3: restore uses it to remove what apply added).
+    let stamps: Vec<PathBuf> = fs::read_dir(target.join("_loadout-backup")).unwrap().map(|e| e.unwrap().path()).collect();
+    assert_eq!(stamps.len(), 1, "{stamps:?}");
+    let held: Vec<_> = fs::read_dir(&stamps[0]).unwrap().map(|e| e.unwrap().file_name()).collect();
+    assert_eq!(held, ["manifest.toml"]);
 }
 
 #[test]

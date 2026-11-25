@@ -20,10 +20,20 @@ pub struct Facts {
 
 pub const NO_FACTS: &str = "no device facts on this platform; pass --facts <file>";
 
-/// `--facts` if given, else Windows detection, else `None`.
+/// Set to `1`, nothing is detected: no `--facts` means no facts. For tests on
+/// a Windows host, where detection would read the build machine's hardware.
+pub const NO_DETECT_ENV: &str = "LOADOUT_NO_DETECT";
+
+/// `--facts` if given, else Windows detection (unless `LOADOUT_NO_DETECT=1`),
+/// else `None`.
 pub fn load(file: Option<&Path>) -> Result<Option<Facts>, String> {
     match file {
         Some(p) => read(p).map(Some),
+        None if std::env::var_os(NO_DETECT_ENV).is_some_and(|v| v == "1") => {
+            static ONCE: std::sync::Once = std::sync::Once::new();
+            ONCE.call_once(|| eprintln!("notice: {NO_DETECT_ENV}=1; device detection skipped"));
+            Ok(None)
+        }
         None => detect(),
     }
 }

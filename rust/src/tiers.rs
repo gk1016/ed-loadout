@@ -54,7 +54,9 @@ const SSAA_MAX: f64 = 1.5;
 
 /// T1 `RTX (5090|5080|4090)` not followed by `Laptop`; T2 `RTX (5090|5080)
 /// Laptop|RTX 5070 Ti|RTX 4080( SUPER)?|RTX 4070 Ti SUPER`; T3 otherwise.
-/// Substring matches, case-sensitive, as the plan's patterns read.
+/// Substring matches, case-sensitive, as the plan's patterns read. Any other
+/// name containing `Laptop` is T3 (v0.3: `RTX 4080 Laptop GPU` and `RTX 5070
+/// Ti Laptop GPU` no longer take the desktop parts' T2).
 pub fn tier(gpu_name: &str) -> Tier {
     for model in ["RTX 5090", "RTX 5080", "RTX 4090"] {
         for (i, _) in gpu_name.match_indices(model) {
@@ -63,11 +65,29 @@ pub fn tier(gpu_name: &str) -> Tier {
             }
         }
     }
-    let t2 = ["RTX 5090 Laptop", "RTX 5080 Laptop", "RTX 5070 Ti", "RTX 4080", "RTX 4070 Ti SUPER"];
+    if ["RTX 5090 Laptop", "RTX 5080 Laptop"].iter().any(|p| gpu_name.contains(p)) {
+        return Tier::T2;
+    }
+    if gpu_name.contains("Laptop") {
+        return Tier::T3;
+    }
+    let t2 = ["RTX 5070 Ti", "RTX 4080", "RTX 4070 Ti SUPER"];
     if t2.iter().any(|p| gpu_name.contains(p)) {
         return Tier::T2;
     }
     Tier::T3
+}
+
+/// Frame cap for a panel refresh rate. Up to 170 Hz the cap is the refresh
+/// itself; above it, the refresh divided (integer division) by the smallest
+/// integer `k` that brings it to 170 or under. Returns (cap, k).
+pub fn max_fps(refresh_hz: i64) -> (i64, i64) {
+    const CEILING: i64 = 170;
+    let mut k = 1;
+    while refresh_hz / k > CEILING {
+        k += 1;
+    }
+    (refresh_hz / k, k)
 }
 
 /// Values derived from the facts, each with the reason printed beside it.
@@ -113,11 +133,20 @@ pub fn derive(f: &Facts) -> Derived {
         Tier::T3 => (3, OverrideTier::None, "T3: no override XML; the target's file is left alone"),
     };
     let tname = format!("{tier:?}");
+    let (max_fps, k) = max_fps(f.refresh_hz);
+    let fps_reason = if k == 1 {
+        "= refresh_hz; VRR is not detected, VSync is left as captured".to_owned()
+    } else {
+        format!(
+            "= refresh_hz / {k} (k = {k}, the smallest divisor that brings {} Hz to 170 or under); VRR is not detected, VSync is left as captured",
+            f.refresh_hz
+        )
+    };
     let lines = vec![
         ("screen_width", f.screen_w.to_string(), format!("panel {panel}")),
         ("screen_height", f.screen_h.to_string(), format!("panel {panel}")),
         ("refresh_hz", f.refresh_hz.to_string(), "panel refresh rate".to_owned()),
-        ("max_fps", f.refresh_hz.to_string(), "= refresh_hz; VRR is not detected, VSync is left as captured".to_owned()),
+        ("max_fps", max_fps.to_string(), fps_reason),
         ("ssaa", fmt_ssaa(ssaa), ssaa_reason),
         ("terrain_quality", terrain_quality.to_string(), tname),
         ("override_tier", override_tier.as_str().to_owned(), ot_reason.to_owned()),
@@ -127,7 +156,7 @@ pub fn derive(f: &Facts) -> Derived {
         screen_width: f.screen_w,
         screen_height: f.screen_h,
         refresh_hz: f.refresh_hz,
-        max_fps: f.refresh_hz,
+        max_fps,
         ssaa,
         terrain_quality,
         override_tier,
@@ -162,6 +191,11 @@ mod tests {
             ("NVIDIA GeForce RTX 4070 Ti", Tier::T3),
             ("NVIDIA GeForce RTX 5070", Tier::T3),
             ("AMD Radeon RX 7800 XT", Tier::T3),
+            // v0.3: Laptop parts other than the 5090 / 5080 are T3.
+            ("NVIDIA GeForce RTX 4080 Laptop GPU", Tier::T3),
+            ("NVIDIA GeForce RTX 5070 Ti Laptop GPU", Tier::T3),
+            ("NVIDIA GeForce RTX 4090 Laptop GPU", Tier::T3),
+            ("NVIDIA GeForce RTX 4070 Laptop GPU", Tier::T3),
         ] {
             assert_eq!(tier(name), t, "{name}");
         }
@@ -177,6 +211,24 @@ mod tests {
             gpu_vram_mb: 0,
             devices: vec![],
         }
+    }
+
+    #[test]
+    fn max_fps_is_the_refresh_up_to_170_then_divided_by_the_smallest_k() {
+        for (hz, cap, k) in [(240, 120, 2), (360, 120, 3), (175, 87, 2), (165, 165, 1), (144, 144, 1), (120, 120, 1), (170, 170, 1), (171, 85, 2), (60, 60, 1)] {
+            assert_eq!(max_fps(hz), (cap, k), "{hz}");
+        }
+        let mut f = facts(2560, 1600, "RTX 5090 Laptop GPU");
+        f.refresh_hz = 240;
+        let d = derive(&f);
+        assert_eq!((d.max_fps, d.refresh_hz), (120, 240));
+        let line = d.lines.iter().find(|l| l.0 == "max_fps").unwrap();
+        assert_eq!(line.1, "120");
+        assert!(line.2.contains("k = 2"), "{}", line.2);
+        f.refresh_hz = 144;
+        let d = derive(&f);
+        assert_eq!(d.max_fps, 144);
+        assert!(d.lines.iter().find(|l| l.0 == "max_fps").unwrap().2.starts_with("= refresh_hz;"));
     }
 
     #[test]

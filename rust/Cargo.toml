@@ -1,9 +1,21 @@
 [package]
-name = "ed-loadout"
-version = "0.2.0"
+name = "loadout-core"
+version = "0.3.0"
 edition = "2024"
 
+# staticlib so MSVC links it straight into the Qt executable (loadout.exe);
+# rlib so the CLI (src/bin/ed-loadout.rs) and the tests use the same library.
+# Same shape as frago-core.
+[lib]
+name = "loadout_core"
+crate-type = ["staticlib", "rlib"]
+
+[[bin]]
+name = "ed-loadout"
+path = "src/bin/ed-loadout.rs"
+
 [dependencies]
+cxx = "1.0"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4", features = ["derive"] }
 roxmltree = "0.20"

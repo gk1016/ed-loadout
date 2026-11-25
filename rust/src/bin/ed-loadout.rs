@@ -3,13 +3,7 @@
 //! Exit codes: 0 ok / identical, 1 differences or problems found,
 //! 2 refused (game running) or usage error, 3 error.
 
-mod apply;
-mod binds;
-mod bundle;
-mod capture;
-mod diff;
-mod facts;
-mod tiers;
+use loadout_core::{apply, binds, capture, diff, facts};
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;

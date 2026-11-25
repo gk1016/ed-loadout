@@ -227,6 +227,11 @@ ApplicationWindow {
             const hit = Core.profiles.filter(function (p) { return p.name === StartSelect })
             if (hit.length > 0) Core.select(hit[0].path)
         }
+        // First open with profiles and none selected: this machine's own, else the first.
+        if (Core.selected === "" && Core.profiles.length > 0) {
+            const mine = Core.profiles.filter(function (p) { return win.haveFacts && p.source_machine === win.facts.hostname })
+            Core.select((mine.length > 0 ? mine[0] : Core.profiles[0]).path)
+        }
         console.info("home: detected=" + win.haveFacts + " profiles=" + Core.profiles.length
                      + " selected=" + (Core.selectedProfile.name || "none") + " game=" + Core.gameRunning
                      + " apply enabled=" + win.canApply)

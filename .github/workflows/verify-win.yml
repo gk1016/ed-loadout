@@ -106,7 +106,7 @@ jobs:
           }
           if ($n -notmatch '^\d+$') { Skip "not a PR number: $n" }
           if ($tag -eq '') { $tag = "pr$n" }
-          if ($tag -cnotmatch '^[a-z0-9-]+$') { Skip "survey tag must match [a-z0-9-]+: $tag" }
+          if ($tag -cnotmatch '^[a-z0-9.-]+$') { Skip "survey tag must match [a-z0-9.-]+: $tag" }
           $raw = (gh pr view $n --repo $env:REPO --json number,state,isDraft,author,headRefName,headRefOid,url,title) -join "`n"
           if ($LASTEXITCODE -ne 0 -or -not $raw) { Skip "no PR #$n" }
           $pr = $raw | ConvertFrom-Json

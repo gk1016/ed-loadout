@@ -55,7 +55,7 @@ jobs:
         run: |
           set -euo pipefail
           first=$(printf '%s\n' "$BODY" | tr -d '\r' | grep -m1 '^/carbon-ui' || true)
-          re='^/carbon-ui[[:space:]]+(probe[[:space:]]+)?([a-z0-9-]+)([[:space:]]+vs[[:space:]]+([a-z0-9-]+))?[[:space:]]*$'
+          re='^/carbon-ui[[:space:]]+(probe[[:space:]]+)?([a-z0-9.-]+)([[:space:]]+vs[[:space:]]+([a-z0-9.-]+))?[[:space:]]*$'
           if [[ ! "$first" =~ $re ]]; then
             echo "usage: /carbon-ui [probe] <tag> [vs <tag>]; got: $first" > "$RUNNER_TEMP/reason"; exit 1
           fi

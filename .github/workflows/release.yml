@@ -29,8 +29,6 @@ jobs:
         shell: powershell
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
-      TEMP: ${{ runner.temp }}
-      TMP: ${{ runner.temp }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,6 +42,9 @@ jobs:
           Write-Output "LOADOUT $v"
 
       - name: build, package, verify
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
         run: |
           $ErrorActionPreference = 'Continue'
           powershell -NoProfile -ExecutionPolicy Bypass -File .\ship.ps1 -NoRelease 2>&1 | ForEach-Object { "$_" } | Tee-Object -Variable out | Select-Object -Last 25

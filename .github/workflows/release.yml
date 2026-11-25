@@ -47,8 +47,10 @@ jobs:
           TMP: ${{ runner.temp }}
         run: |
           $ErrorActionPreference = 'Continue'
-          powershell -NoProfile -ExecutionPolicy Bypass -File .\ship.ps1 -NoRelease 2>&1 | ForEach-Object { "$_" } | Tee-Object -Variable out | Select-Object -Last 25
-          if (-not ($out | Select-String -Pattern '=== VERIFY OK' -SimpleMatch -Quiet)) { throw "ship.ps1 did not end with VERIFY OK" }
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\ship.ps1 -NoRelease 2>&1 | ForEach-Object { "$_" }
+          # ship.ps1 writes its lines to ship.log, not stdout; build.ps1 to build.log.
+          foreach ($f in 'build.log','ship.log') { if (Test-Path $f) { Write-Output "--- $f ---"; Get-Content $f | Select-Object -Last 40 } }
+          if (-not ((Test-Path ship.log) -and (Select-String -Path ship.log -Pattern '=== VERIFY OK' -SimpleMatch -Quiet))) { throw "ship.log has no VERIFY OK line" }
           $setup = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) 'transfer\LOADOUT_Setup.exe'
           if (-not (Test-Path $setup)) { throw "no $setup" }
           New-Item -ItemType Directory -Force -Path dist | Out-Null

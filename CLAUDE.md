@@ -1,20 +1,25 @@
 # LOADOUT (ed-loadout) — repo rules
 
-Standalone Rust CLI that captures, diffs and applies an Elite Dangerous settings bundle (Graphics fxcfg/XML, GraphicsConfigurationOverride.xml, Bindings + StartPreset, ED-UP edvr*.ini) across machines, with per-machine overrides, backups and a bound-device check. TacOps / Boring Tech Stuff. No game-memory reads, no hooks, no network. Build host: EVO-X2 WSL runner `x2-ed-loadout-wsl`.
+Qt 6 desktop app (`loadout.exe`, `cpp/` + `qml/`) over a Rust core (`rust/`, crate `loadout-core`, also built as the CLI `ed-loadout.exe`) that captures, diffs and applies an Elite Dangerous settings bundle (Graphics fxcfg/XML, GraphicsConfigurationOverride.xml, Bindings + StartPreset; ED-UP edvr*.ini not yet) across machines, with per-machine overrides, backups with restore and a bound-device check. Installed by `LOADOUT_Setup.exe`. TacOps / Boring Tech Stuff. No game-memory reads, no hooks, no network. Build host: EVO-X2 Windows runner `x2-ed-loadout-win` (MSVC, Qt 6.8.3, cargo, Inno Setup 6).
 
 ## Standing workflow
 
 1. `ISSUES.md` at the repo root is the permanent ledger. Every session touching the
    app starts by reading it. Append new findings; never re-file. Closed items stay
    closed, with their evidence.
-2. Passes are two-phase. Survey: build with `cargo build`, run `cargo test`, exercise
-   every command against `fixtures/devmachine02`, record findings, fix nothing. Then
-   fix: by severity, smallest change, rebuild, reproduce, one commit per fix.
-3. Evidence is test output and `diff` output pasted into the report; there is no UI.
-4. After a fix pass: `cargo test` + `cargo clippy -- -D warnings`, push main. Never
-   leave commits unpushed on this machine.
-5. Releases only on explicit instruction. Path: GitHub Release with a Windows binary
-   (not set up in v0).
+2. Passes are two-phase. Survey: `.\ship.ps1 -NoRelease` (build, `cargo test` from
+   `rust/`, package, the scripted run), then `.\shots.ps1 -Survey <tag>`; exercise
+   every CLI command against `fixtures/devmachine02`; record findings, fix nothing.
+   Then fix: by severity, smallest change, rebuild, reproduce, one commit per fix.
+3. Evidence is test output, `ship.log` lines and `diff` output pasted into the report,
+   and for anything on screen the survey captures in `_shots\uipass\survey-<tag>\`.
+4. After a fix pass: from `rust/`, `cargo test` (with `LOADOUT_NO_DETECT=1`; `build.ps1`
+   sets it) + `cargo clippy -- -D warnings`; `.\ship.ps1 -NoRelease` must end
+   `=== VERIFY OK (no release) ===`; push main. Never leave commits unpushed on this
+   machine.
+5. Releases only on explicit instruction. Path: `.github/workflows/release.yml` on a
+   `v*` tag attaches `LOADOUT_Setup.exe` to a GitHub Release (being adjusted by
+   Cowork for v0.3, ISSUES OBS-012). `ship.ps1` only verifies; it cuts no release.
 6. EVO-X2 is the sole build host. devmachine02 is the game machine only, never builds;
    its settings are mirrored in `fixtures/devmachine02/` and never edited to pass a test.
 7. A fix touching more than three files, or changing file-writing behaviour that a
@@ -65,9 +70,13 @@ When you run as claude-code-action (`.github/workflows/claude.yml`, triggered by
    section says so with the error line and the PR still opens.
 4. Open a DRAFT PR (`gh pr create --draft --base main`) titled from the plan's
    first heading.
-5. The runner is WSL Linux: no Windows APIs, no `tasklist`; Windows-only paths stay
-   behind `cfg(windows)` and their pure logic is unit-tested. The stack's build
-   workflow runs `cargo test` on the PR.
+5. The runner is Windows (`x2-ed-loadout-win`, Graham's logon session, so there is a
+   desktop): build with `.\ship.ps1 -NoRelease`, survey once per wave with
+   `.\shots.ps1 -Survey <slug>`. Everything a run touches is a scratch folder under
+   `%TEMP%`: never the box's real Elite Options dir, never the saved `LOADOUT.ini`,
+   never an existing LOADOUT install. Windows-only code stays behind `cfg(windows)`
+   and its pure logic is unit-tested. The stack's build workflow runs `.\build.ps1`
+   (which runs `cargo test` from `rust/`) on the PR.
 6. Blocked otherwise (a stop-and-ask condition, an ambiguous criterion): comment
    the question on the issue, add label `needs-graham` (`gh issue edit <n>
    --add-label needs-graham`), then stop. The comment goes first and the label

@@ -1,226 +1,201 @@
-# ed-loadout (LOADOUT)
+# LOADOUT
 
-Capture, diff and apply an Elite Dangerous settings bundle across machines, with
-per-machine overrides, backups and a bound-device check. No game-memory reads, no
-hooks, no network. TacOps / Boring Tech Stuff.
+Carry your Elite Dangerous settings from one machine to another. LOADOUT reads what
+the machine in front of you is (panel, GPU, connected controllers), shows what it will
+write for it, writes it on APPLY, and keeps a backup of everything it replaced. No
+game-memory reads, no hooks, no network. TacOps / Boring Tech Stuff.
 
-The bundle is these files under the Elite Options dir
+The settings bundle is these files under the Elite Options dir
 (`%LOCALAPPDATA%\Frontier Developments\Elite Dangerous\Options`):
 
 - `Graphics/Custom.*.fxcfg`, `Graphics/Settings.xml`, `Graphics/DisplaySettings.xml`,
   `Graphics/StartPreset.start`, `Graphics/GraphicsConfigurationOverride.xml`
 - `Bindings/*.binds`, `Bindings/StartPreset.*.start`
 
-ED-UP `edvr*.ini` is not in v0.
+ED-UP `edvr*.ini` is not in the bundle.
 
 ## Install
 
-Download `ed-loadout.exe` from the latest
-[GitHub Release](https://github.com/gk1016/ed-loadout/releases/latest). Put it in a
-folder on your `PATH`, or run it from the Options dir. It is a console program: run it
-from PowerShell or `cmd`, not by double-clicking.
+Download `LOADOUT_Setup.exe` from the latest
+[GitHub Release](https://github.com/gk1016/ed-loadout/releases/latest) and run it. It
+installs for the current user into `%LOCALAPPDATA%\LOADOUT` (no administrator prompt)
+and adds LOADOUT to the Start menu. Open LOADOUT from there: it is a windowed app, not
+a console program.
 
-Without `--options` (or the `<Bindings dir>` argument of `check-binds` and
-`restore-preset`), `capture`, `apply`, `check-binds` and `restore-preset` use
-`%LOCALAPPDATA%\Frontier Developments\Elite Dangerous\Options` (and its `Bindings`
-dir) and prints the path it resolved. If `LOCALAPPDATA` is unset or that dir does not
-exist it exits 3 and names the path it tried.
+Uninstall from Windows Settings > Apps. Your profiles (`%LOCALAPPDATA%\LOADOUT\profiles`
+by default) are yours and are left in place.
+
+## What the screen shows
+
+One window:
+
+- **Command bar** (top): the machine's hostname, GPU, panel (`width x height @ Hz`),
+  its tier (T1, T2 or T3) and the app version.
+- **Tool rail** (left): HOME, PROFILES, LOG, and SETTINGS at the bottom.
+- **HOME**: the PROFILES pane on the left, and on the right:
+  - **DETECTED**: what LOADOUT read from this machine just now: hostname, panel,
+    refresh rate, GPU, VRAM, tier, and each connected controller as the ID Elite's
+    bindings use (`045E0B22` is an Xbox pad, `231D....` is VKB).
+  - **WILL APPLY**: for the selected profile, one row per setting LOADOUT will set:
+    the key, the value, where the value comes from (`derived` from this machine, or
+    a `[machine.<hostname>]` section in the profile) and why. Under it, every file
+    that will be written, and in red every controller the profile's bindings use that
+    is not connected right now.
+  - **DETECT AGAIN**, **APPLY <profile>**, **RESTORE LAST BACKUP**.
+- **PROFILES**: the same list with the selected profile's files and their SHA-256.
+- **LOG**: the lines LOADOUT printed for what it did, the same lines the command line
+  prints.
+- **Status bar** (bottom): the Options dir in use, the stamp of the last backup,
+  whether the game is running (red when it is), and the build.
+
+While `EliteDangerous64.exe` is running, APPLY and RESTORE are off: the game rewrites
+these files on exit.
 
 ## Two machines
 
-On the desktop, with the game closed:
+On the desktop, with the game closed: open LOADOUT and press **CAPTURE THIS MACHINE**.
+That creates a profile named after the desktop in the profiles folder
+(`%LOCALAPPDATA%\LOADOUT\profiles\<hostname>`).
 
-```
-ed-loadout capture --out desk --machine desk
-```
+Copy that profile folder to the laptop (USB stick, network share, anything). On the
+laptop, with the game closed and the controllers plugged in: open LOADOUT, press
+**IMPORT FOLDER** and pick the copied folder, select the profile, read WILL APPLY, and
+press **APPLY**. A confirm lists every file that will be written and the backup folder;
+**APPLY NOW** writes them.
 
-Copy the `desk` folder to the laptop (USB stick, network share, anything). On the
-laptop, with the game closed and the controllers plugged in:
-
-```
-ed-loadout apply desk
-```
-
-`apply` reads the laptop's panel, GPU and connected controllers, derives the
-resolution, refresh, frame cap, Supersampling, terrain quality and override XML from
-the tier table (see [Hands-off](#hands-off)), prints every value with its reason,
-warns for each device the desktop's bindings use that is not connected, and applies.
-Nothing to type. To pin a value, add a section named after the laptop's hostname to
-the end of `desk\profile.toml`; its keys win over the derived ones, one by one:
+Nothing to type: the laptop's resolution, refresh rate, frame cap, Supersampling,
+terrain quality and override XML are derived from the laptop itself (see
+[How the values are derived](#how-the-values-are-derived)). To pin a value for one
+machine, add a section named after its hostname to the end of the profile's
+`profile.toml`; its keys win over the derived ones, one by one, and WILL APPLY shows
+them with that section as their source:
 
 ```
 [machine.FIELDLAPTOP]
 ssaa = 1.25
 ```
 
-`ed-loadout detect` shows what `apply` would derive without writing anything. To
-refuse the apply when a bound device is missing, add `--strict-binds`.
+## Backups and restore
 
-Before writing, `apply` copies every file it is about to overwrite into
-`Options\_loadout-backup\<timestamp>\`, laid out like the Options dir. To undo, copy
-the `Graphics` and `Bindings` folders from that timestamp folder back over the ones in
-the Options dir (a file the laptop did not have before is not in the backup; delete it
-by hand if you want it gone).
+Every APPLY first creates `Options\_loadout-backup\<timestamp>\`, copies into it every
+file it is about to overwrite (laid out like the Options dir), and writes
+`manifest.toml` there: every file the apply writes, and whether it existed before.
 
-## Hands-off
+**RESTORE LAST BACKUP** undoes the last APPLY from that folder: files that existed
+before are put back byte-for-byte, and files the apply added are removed. What the
+restore itself replaces is copied to its own timestamp folder first, so nothing is
+ever lost. Backup folders are never deleted by LOADOUT.
 
-On Windows, `detect`, `apply` and `check-binds` (without `--devices` / `--from-log`)
-read three facts from the machine itself:
+A backup folder made before v0.3 has no `manifest.toml`; copy its `Graphics` and
+`Bindings` folders back by hand.
+
+## Settings
+
+- **Profiles folder**: where profiles are listed, captured and imported. Default
+  `%LOCALAPPDATA%\LOADOUT\profiles`.
+- **Options dir override**: set it only if Elite's Options dir is not at the default
+  path. The dir in use is shown under it and in the status bar.
+- **Theme**: Deepfield (dark) or Daylight.
+
+Settings are kept in `%APPDATA%\Boring Tech Stuff\LOADOUT.ini`.
+
+## How the values are derived
+
+LOADOUT reads three facts from the machine:
 
 - the primary display's current mode (`EnumDisplaySettingsExW`): width, height,
   refresh rate;
 - the first hardware GPU (DXGI): name and dedicated VRAM;
 - the connected HID devices (Raw Input), as Elite's binds `Device` GUID `VVVVPPPP`
-  (USB vendor + product, upper-case hex: `045E0B22` an Xbox pad, `231D....` VKB).
-
-The hostname is `%COMPUTERNAME%`. On other platforms, and to try a machine you are not
-sitting at, pass `--facts <file>`: the same facts as TOML, as written by
-`ed-loadout detect --dump <file>`:
-
-```
-hostname = "devmachine02"
-screen_w = 5120
-screen_h = 1440
-refresh_hz = 120
-gpu_name = "NVIDIA GeForce RTX 5090"
-gpu_vram_mb = 32607
-devices = ["231D0126", "231D0127", "231D2204", "045E0B22"]
-```
-
-From the facts:
+  (USB vendor + product, upper-case hex).
 
 | Tier | GPU name contains | `ssaa` | `terrain_quality` | `override_tier` |
 |---|---|---|---|---|
 | T1 | `RTX 5090`, `RTX 5080`, `RTX 4090` (not `Laptop`) | budget 16.6 Mpx | 4 | `t1` |
-| T2 | `RTX 5090 Laptop`, `RTX 5080 Laptop`, `RTX 5070 Ti`, `RTX 4080` (`SUPER`), `RTX 4070 Ti SUPER` | budget 10.0 Mpx | 3 | `t2` |
-| T3 | anything else | 1.0 | 3 | `none` |
+| T2 | `RTX 5090 Laptop`, `RTX 5080 Laptop`; `RTX 5070 Ti`, `RTX 4080` (`SUPER`), `RTX 4070 Ti SUPER` (not `Laptop`) | budget 10.0 Mpx | 3 | `t2` |
+| T3 | anything else, including every other `Laptop` GPU | 1.0 | 3 | `none` |
 
-`screen_width`, `screen_height` and `refresh_hz` come from the panel and `max_fps` =
-`refresh_hz` (VRR is not detected; `<VSync>` is never edited, it stays as captured). For T1 and T2, `ssaa` =
-sqrt(budget / (width x height)), rounded to 0.05 and clamped to 1.0-1.5. The T1 budget
-is measured: devmachine02, a desktop RTX 5090, holds a flat 120 Hz at 5120x1440 with
-Supersampling 1.5 (~16.6 Mpx rendered) at 81-85% GPU use. Every derived Supersampling
-is a starting point, not a tuned value: raise it while GPU use stays under ~85%.
+`screen_width`, `screen_height` and `refresh_hz` come from the panel. `max_fps` is the
+refresh rate up to 170 Hz; above that it is the refresh rate divided by the smallest
+whole number that brings it to 170 or under (240 -> 120, 360 -> 120, 175 -> 87;
+165, 144 and 120 stay as they are), and the reason names the divisor. VRR is not
+detected and `<VSync>` is never edited: it stays as captured.
+
+For T1 and T2, `ssaa` = sqrt(budget / (width x height)), rounded to 0.05 and clamped
+to 1.0-1.5. The T1 budget is measured: devmachine02, a desktop RTX 5090, holds a flat
+120 Hz at 5120x1440 with Supersampling 1.5 (~16.6 Mpx rendered) at 81-85% GPU use.
+Every derived Supersampling is a starting point, not a tuned value: raise it while GPU
+use stays under ~85%. Render scale is per GPU: do not pin devmachine02's 1.5 on a
+smaller card.
 
 `t1` is devmachine02's beyond-Ultra `GraphicsConfigurationOverride.xml`
-(`tiers/t1.xml`); `t2` is the same without the `DirectionalShadows_Ultra`,
-`SpotShadows_Ultra` and `Volumetrics` blocks (`tiers/t2.xml`); `none` leaves the
+(`rust/tiers/t1.xml`); `t2` is the same without the `DirectionalShadows_Ultra`,
+`SpotShadows_Ultra` and `Volumetrics` blocks (`rust/tiers/t2.xml`); `none` leaves the
 target's override file alone.
 
-Any key in `[machine.<name>]` (name = `--machine`, else the hostname) overrides the
-derived value for that key only. `apply` prints each effective value with its source,
-`derived` or `[machine.<name>]`. With no facts and no `[machine.<name>]`, `apply`
-writes the profile exactly as captured.
+What each key edits. Element text is replaced in place and no other byte changes; an
+element that is absent is an error and nothing is written (elements are never
+inserted):
 
-## Exit codes
+| Key | Element(s) |
+|---|---|
+| `ssaa` (written `%.6f`) | `<SSAAMultiplier>` in `Graphics/Custom.*.fxcfg` |
+| `screen_width`, `screen_height` | `<ScreenWidth>`, `<ScreenHeight>` in `Graphics/DisplaySettings.xml` |
+| `refresh_hz` | `<DX11_RefreshRateNumerator>`, and `<DX11_RefreshRateDenominator>` set to `1` |
+| `max_fps` | `<MaxFramesPerSecond>`, and `<LimitFrameRate>` set to `true` |
+| `terrain_quality` (`3` or `4`) | `<TerrainQuality>` in `Graphics/Custom.*.fxcfg` |
+| `override_tier` (`"t1"`, `"t2"`, `"captured"`, `"none"`) | `Graphics/GraphicsConfigurationOverride.xml`: `t1.xml` or `t2.xml`, the profile's own file (`captured`), or nothing (`none`) |
 
-Exit codes: `0` ok / identical, `1` differences or problems found, `2` refused
-(game running) or bad arguments, `3` error.
+The fxcfg that `ssaa` and `terrain_quality` edit is the
+`Graphics/Custom.<Major>.<Minor>.fxcfg` with the highest version, the one Elite reads.
+If the Options dir already holds a newer one than the profile's (the target machine is
+on a later game version), the apply is an error and nothing is written: capture from a
+machine on the same game version.
 
-The examples below run against the devmachine02 corpus in `fixtures/devmachine02`
-(RTX 5090, 5120x1440 @ 120 Hz).
+## The command line: ed-loadout.exe
 
-## capture
+The engine under the app is also installed as `ed-loadout.exe`, beside `loadout.exe`,
+for scripting. It is a console program: run it from PowerShell or `cmd`. Its flags are
+the same as in v0.2.
 
 ```
 ed-loadout capture [--options <Options dir>] --out <profile dir> --machine <name>
-```
-
-Copies the bundle byte-for-byte (line endings untouched) into `<profile>/files/` and
-writes `<profile>/profile.toml` with `source_machine`, `captured_at` (RFC 3339) and a
-sha256 per file. Refuses to write over an existing profile.
-
-```
-$ ed-loadout capture --options Options --out devmachine02-profile --machine devmachine02
-captured Bindings/Custom.4.2.binds
-...
-wrote devmachine02-profile/profile.toml (7 files)
-
-$ cat devmachine02-profile/profile.toml
-source_machine = "devmachine02"
-captured_at = "2026-11-21T17:45:41Z"
-
-[files]
-"Graphics/Custom.4.4.fxcfg" = "36d2898de631ae53362c58edd23ee937ef7f5e7c049c853d8a591fdbb2a69e32"
-...
-```
-
-## diff
-
-```
 ed-loadout diff <profile-a> <profile-b>
-```
-
-For `Graphics/Custom.*.fxcfg`, `Settings.xml` and `DisplaySettings.xml`, one line per
-changed element (`<path>: <Element> <old> -> <new>`). For `.start`, `.binds` and
-`GraphicsConfigurationOverride.xml`, a unified diff. Files on one side only are listed
-as `only in a:` / `only in b:`. Exit 0 identical, 1 different.
-
-```
-$ ed-loadout diff devmachine02-profile laptop-profile
-Graphics/Custom.4.4.fxcfg: SSAAMultiplier 1.500000 -> 1.250000
-```
-
-## check-binds
-
-```
+ed-loadout detect [--facts <file>] [--dump <file>]
+ed-loadout apply <profile> [--options <Options dir>] [--machine <name>] [--facts <file>] [--strict-binds]
 ed-loadout check-binds [<Bindings dir>] [--devices <GUID,...> | --from-log | --facts <file>] [--binds <file>]
-```
-
-Elite rewrites `StartPreset.4.start` when a bound device is missing at launch, so that
-file is never used to find the binds file. The binds file is, in order: `--binds` if
-given; the file named on line 1 of `BindingLoadingErrors.log` if it exists; the newest
-`Custom.4.*.binds`. The resolved path is printed.
-
-Every `Device="..."` in the binds file other than `Keyboard`, `Mouse` and `{NoDevice}` is
-checked against `--devices` (the GUIDs connected now), or the missing GUIDs are taken
-from the `Failed to find GUID for device:` lines of the log with `--from-log`. With
-neither, the connected devices are detected (Windows) or read from `--facts`; on other
-platforms without `--facts` it exits 3. It also
-warns for each of the four lines of `StartPreset.4.start` that is not `Custom`. Exit 1
-when a device is missing or a preset line is not `Custom`.
-
-```
-$ ed-loadout check-binds Options/Bindings --devices 231D0126,231D0127,231D2204
-binds: Options/Bindings/Custom.4.2.binds (from BindingLoadingErrors.log)
-missing device: 045E0B22 (3 bindings)
-
-$ ed-loadout check-binds Options/Bindings --from-log     # after the 2026-11-20 launch without the pad
-binds: Options/Bindings/Custom.4.2.binds (from BindingLoadingErrors.log)
-missing device: 045E0B22 (3 bindings)
-warning: StartPreset.4.start line 1: "KeyboardMouseOnly", not Custom
-warning: StartPreset.4.start line 2: "GenericJoystick", not Custom
-warning: StartPreset.4.start line 3: "KeyboardMouseOnly", not Custom
-warning: StartPreset.4.start line 4: "KeyboardMouseOnly", not Custom
-```
-
-## restore-preset
-
-```
 ed-loadout restore-preset [<Bindings dir>] [--preset Custom]
 ```
 
-Copies `StartPreset.4.start` to `StartPreset.4.start.bak-<timestamp>`, then rewrites it
-as four lines of the preset name, CRLF. Plug the device back in first.
+Exit codes: `0` ok / identical, `1` differences or problems found, `2` refused (game
+running) or bad arguments, `3` error. Without `--options` (or the `<Bindings dir>`
+argument) the default Options dir is used and printed; if `LOCALAPPDATA` is unset or
+the dir does not exist it exits 3 and names the path it tried.
+
+- **capture** copies the bundle byte-for-byte (line endings untouched) into
+  `<profile>/files/` and writes `<profile>/profile.toml` with `source_machine`,
+  `captured_at` (RFC 3339) and a sha256 per file. It refuses to write over an existing
+  profile.
+- **diff** prints one line per changed element for the flat graphics XML
+  (`Graphics/Custom.4.4.fxcfg: SSAAMultiplier 1.500000 -> 1.250000`), a unified diff
+  for `.start`, `.binds` and the override XML, and `only in a:` / `only in b:`.
+- **detect** prints the facts, the tier and every derived value with its reason.
+  `--facts <file>` supplies the facts as TOML instead of detecting (to try a machine
+  you are not sitting at); `--dump <file>` writes them to a new file.
+- **apply** is what the APPLY button runs: same derivation, same backup and
+  `manifest.toml`, same lines. `--strict-binds` refuses (exit 1, nothing written) when
+  a bound device is not connected. Restore is in the app; from the command line, copy
+  the backup folder's files back.
+- **check-binds** reports bound devices that are missing and a clobbered
+  `StartPreset.4.start`. Elite rewrites that file when a bound device is missing at
+  launch, so the binds file is taken from `--binds`, else line 1 of
+  `BindingLoadingErrors.log`, else the newest `Custom.4.*.binds`.
+- **restore-preset** copies `StartPreset.4.start` to
+  `StartPreset.4.start.bak-<timestamp>`, then rewrites it as four lines of the preset
+  name, CRLF. Plug the device back in first.
 
 ```
-$ ed-loadout restore-preset Options/Bindings
-backup: Options/Bindings/StartPreset.4.start.bak-20261121-174541-298
-wrote Options/Bindings/StartPreset.4.start (Custom x4, CRLF)
-```
-
-## detect
-
-```
-ed-loadout detect [--facts <file>] [--dump <file>]
-```
-
-Prints the facts (detected on Windows, else from `--facts`), the tier and every
-derived value with its reason. `--dump` writes the facts as TOML to a new file (never
-over an existing one). Off Windows without `--facts` it exits 3.
-
-```
-$ ed-loadout detect --facts tests/facts/laptop-5090m.toml
+$ ed-loadout detect --facts rust/tests/facts/laptop-5090m.toml
 hostname: fieldlaptop
 panel: 2560x1600 @ 240 Hz
 gpu: NVIDIA GeForce RTX 5090 Laptop GPU (24576 MB)
@@ -229,73 +204,15 @@ tier: T2
 derived screen_width = 2560  (panel 2560x1600)
 derived screen_height = 1600  (panel 2560x1600)
 derived refresh_hz = 240  (panel refresh rate)
-derived max_fps = 240  (= refresh_hz; VRR is not detected, VSync is left as captured)
+derived max_fps = 120  (= refresh_hz / 2 (k = 2, the smallest divisor that brings 240 Hz to 170 or under); VRR is not detected, VSync is left as captured)
 derived ssaa = 1.5  (T2 budget 10.0 Mpx over 2560x1600, 1.55 clamped to 1.5; starting point: raise while GPU use stays under ~85%)
 derived terrain_quality = 3  (T2)
 derived override_tier = t2  (T2: t1 without DirectionalShadows_Ultra, SpotShadows_Ultra, Volumetrics)
 ```
 
-## apply
-
-```
-ed-loadout apply <profile> [--options <Options dir>] [--machine <name>] [--facts <file>] [--strict-binds]
-```
-
-Refuses with exit 2 while `EliteDangerous64.exe` is running (checked with `tasklist`
-on Windows; other platforms print a notice and skip the check). Otherwise: derives
-values from the facts (see [Hands-off](#hands-off)), lays the `[machine.<name>]` keys
-from `profile.toml` over them, copies every file it will overwrite to
-`<Options>/_loadout-backup/<timestamp>/`, writes the profile files, and applies the
-effective values by replacing element text in place. No other byte changes. An
-override whose element is absent is an error and nothing is written; elements are
-never inserted.
-
-With facts, it first checks the profile's highest `Bindings/Custom.4.<n>.binds` (the
-file it is about to write) against the connected devices and prints
-`warning: bound device <GUID> (<n> bindings) is not connected` for each one missing,
-then applies anyway. With `--strict-binds` a missing device is exit 1 and nothing is
-written; `--strict-binds` without facts is exit 3. Without facts it prints
-`binds check skipped (no device facts)`.
-
-| Override | Element(s) |
-|---|---|
-| `ssaa` (written `%.6f`) | `<SSAAMultiplier>` in `Graphics/Custom.*.fxcfg` |
-| `screen_width`, `screen_height` | `<ScreenWidth>`, `<ScreenHeight>` in `Graphics/DisplaySettings.xml` |
-| `refresh_hz` | `<DX11_RefreshRateNumerator>`, and `<DX11_RefreshRateDenominator>` set to `1` |
-| `max_fps` | `<MaxFramesPerSecond>`, and `<LimitFrameRate>` set to `true` |
-| `terrain_quality` (`3` or `4`) | `<TerrainQuality>` in `Graphics/Custom.*.fxcfg` |
-| `override_tier` (`"t1"`, `"t2"`, `"captured"`, `"none"`) | `Graphics/GraphicsConfigurationOverride.xml`: write `tiers/t1.xml` or `tiers/t2.xml`, the profile's own file (`captured`, the default without facts), or nothing (`none`, the target's file is left alone) |
-
-The fxcfg target for `ssaa` and `terrain_quality` is the
-`Graphics/Custom.<Major>.<Minor>.fxcfg` with the highest version, the one Elite reads
-(printed as `fxcfg target:`); older versions left by game updates are written as
-captured. Other `Custom.*fxcfg*` names (a `.bak`, say) are ignored with a notice. If
-the Options dir already holds a newer `Custom.*.fxcfg` than the profile's (the target
-machine is on a later game version), either key is an error and nothing is written.
-
-Render scale is per GPU: do not copy devmachine02's SSAA 1.5 to a smaller card. With
-facts, `apply` derives a starting value; without, give that machine its own `ssaa`.
-
-```
-$ cat >> devmachine02-profile/profile.toml
-[machine.laptop]
-ssaa = 1.25
-max_fps = 120
-
-$ ed-loadout apply devmachine02-profile --options Options --machine laptop
-notice: no device facts on this platform; pass --facts <file>
-effective max_fps = 120  ([machine.laptop])
-effective ssaa = 1.25  ([machine.laptop])
-binds check skipped (no device facts)
-fxcfg target: Graphics/Custom.4.4.fxcfg
-ssaa target: Graphics/Custom.4.4.fxcfg
-override Graphics/Custom.4.4.fxcfg: SSAAMultiplier = 1.250000
-override Graphics/DisplaySettings.xml: MaxFramesPerSecond = 120
-override Graphics/DisplaySettings.xml: LimitFrameRate = true
-backup: Options/_loadout-backup/20261121-174541-303 (7 files)
-wrote Bindings/Custom.4.2.binds
-...
-```
+`LOADOUT_NO_DETECT=1` makes the engine detect nothing (no `--facts` then means no
+facts); the test suite sets it so a Windows build host's own hardware never leaks into
+a test.
 
 ## A note on ED-UP and DLSS
 
@@ -303,8 +220,16 @@ At Supersampling >= 1.0, ED-UP labels DLSS as DLAA, and that is correct.
 
 ## Build
 
+On Windows (EVO-X2), with MSVC, Qt 6.8.3 (`C:\Qt\6.8.3\msvc2022_64` or `HUMINT_QT`),
+cargo and Inno Setup 6:
+
 ```
-cargo test
-cargo clippy --all-targets -- -D warnings
-cargo build --release --target x86_64-pc-windows-gnu   # ed-loadout.exe, needs mingw-w64
+.\build.ps1                 # cargo build + cargo test (rust\), cmake + ninja -> build\loadout.exe
+.\ship.ps1 -NoRelease       # build, package, run the packaged exe, scripted capture/apply/restore, installer check
+.\shots.ps1 -Survey <tag>   # the UI survey -> _shots\uipass\survey-<tag>\
 ```
+
+The Rust core alone: `cargo test` and `cargo clippy --all-targets -- -D warnings` from
+`rust\` (set `LOADOUT_NO_DETECT=1` on Windows). The repo layout: `rust\` the core
+(`loadout-core`: the library, the cxx bridge, the `ed-loadout` CLI), `cpp\` and `qml\`
+the Qt shell, `fixtures\devmachine02\` the settings corpus the tests run against.

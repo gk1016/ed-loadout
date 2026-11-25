@@ -1,10 +1,11 @@
-# Release lane for ed-loadout: build the Windows (.exe, cross-compiled with the
-# runner's mingw-w64 + x86_64-pc-windows-gnu target) and Linux binaries and
-# attach them to a GitHub Release. Runs on a v* tag or by hand. Written by
-# Cowork 2026-11-21 (plan claude/plans/2026-11-21-loadout-v0.1.md). Nothing
-# here touches a user's machine; LOADOUT has no server side.
-# LOADOUT_Portable.exe is the fixed-name asset that edh.tacops.io/downloads
-# fetches (ed-humint scripts/deploy/pull-portable.sh, plan 2026-11-21-downloads-loadout).
+# Release lane for LOADOUT (v0.3+): the Windows runner builds the Qt app with
+# the same ship.ps1 gate Code uses (build -> package -> install the packaged
+# exe -> verify), then attaches ..\transfer\LOADOUT_Setup.exe to a GitHub
+# Release. Runs on a v* tag or by hand. Rewritten by Cowork 2026-11-25 (plan
+# claude/plans/2026-11-25-loadout-v0.3-desktop.md); the v0.1-v0.2 WSL
+# cross-build and LOADOUT_Portable.exe are gone with the console app.
+# LOADOUT_Setup.exe is the fixed-name asset edh.tacops.io/downloads fetches
+# (ed-humint scripts/deploy/pull-portable.sh).
 name: release
 
 on:
@@ -13,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing tag to release (e.g. v0.1.1)'
+        description: 'Existing tag to release (e.g. v0.3.0)'
         required: true
 
 permissions:
@@ -21,37 +22,52 @@ permissions:
 
 jobs:
   release:
-    runs-on: ${{ fromJSON(vars.BTS_RUNNER_WSL || '["self-hosted","linux","wsl","evo-x2"]') }}
-    timeout-minutes: 45
+    runs-on: ${{ fromJSON(vars.BTS_RUNNER_WIN || '["self-hosted","windows","evo-x2"]') }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: powershell
     env:
       TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      TEMP: ${{ runner.temp }}
+      TMP: ${{ runner.temp }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - name: build
+      - name: version matches tag
         run: |
-          set -euo pipefail
-          export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
-          cargo --version
-          cargo test
-          cargo build --release --target x86_64-pc-windows-gnu
-          cargo build --release
-          mkdir -p dist
-          cp target/x86_64-pc-windows-gnu/release/ed-loadout.exe dist/ed-loadout-${TAG}-windows-x86_64.exe
-          cp target/x86_64-pc-windows-gnu/release/ed-loadout.exe dist/LOADOUT_Portable.exe
-          cp target/release/ed-loadout dist/ed-loadout-${TAG}-linux-x86_64
-          (cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
-          file dist/*.exe
+          $ErrorActionPreference = 'Stop'
+          $v = (Select-String -Path rust\Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value.Trim()
+          if ("v$v" -ne $env:TAG) { throw "tag $env:TAG but rust/Cargo.toml is $v" }
+          Write-Output "LOADOUT $v"
+
+      - name: build, package, verify
+        run: |
+          $ErrorActionPreference = 'Continue'
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\ship.ps1 -NoRelease 2>&1 | ForEach-Object { "$_" } | Tee-Object -Variable out | Select-Object -Last 25
+          if (-not ($out | Select-String -Pattern '=== VERIFY OK' -SimpleMatch -Quiet)) { throw "ship.ps1 did not end with VERIFY OK" }
+          $setup = Join-Path (Split-Path $env:GITHUB_WORKSPACE -Parent) 'transfer\LOADOUT_Setup.exe'
+          if (-not (Test-Path $setup)) { throw "no $setup" }
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item $setup dist\LOADOUT_Setup.exe
+          $h = (Get-FileHash dist\LOADOUT_Setup.exe -Algorithm SHA256).Hash.ToLower()
+          [IO.File]::WriteAllText("$PWD\dist\SHA256SUMS.txt", "$h  LOADOUT_Setup.exe`n")
+          Get-Content dist\SHA256SUMS.txt
+          exit 0
 
       - name: release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/* --clobber
-          else
-            gh release create "$TAG" dist/* --title "LOADOUT $TAG" --notes "Windows and Linux builds of ed-loadout $TAG. See README for the two-machine walkthrough."
-          fi
+          $ErrorActionPreference = 'Stop'
+          $gh = (Get-Command gh -ErrorAction SilentlyContinue).Source
+          if (-not $gh) { $gh = 'C:\Program Files\GitHub CLI\gh.exe' }
+          & $gh release view $env:TAG 2>$null | Out-Null
+          if ($LASTEXITCODE -eq 0) {
+            & $gh release upload $env:TAG dist\LOADOUT_Setup.exe dist\SHA256SUMS.txt --clobber
+          } else {
+            & $gh release create $env:TAG dist\LOADOUT_Setup.exe dist\SHA256SUMS.txt --title "LOADOUT $env:TAG" --notes "LOADOUT $env:TAG for Windows. Run LOADOUT_Setup.exe; it installs to %LOCALAPPDATA%\LOADOUT with a Start-menu entry. The CLI ed-loadout.exe ships beside it."
+          }
+          if ($LASTEXITCODE -ne 0) { throw "gh release exited $LASTEXITCODE" }

@@ -1,0 +1,452 @@
+# The Windows pass for a claude[bot] draft PR, on the repo's Windows runner
+# (Graham's logon session, the same runner as build.yml): the verify script ->
+# its pass line, the survey script -> _shots/uipass/survey-<tag>/ with an
+# index.md, the survey pushed to ui/survey-<tag> (cut from main), one evidence
+# comment, gh pr ready. No release, ever.
+# Triggers: build succeeded on a claude/* PR; workflow_dispatch (pr, tag);
+# "/windows-pass [tag]" by gk1016 on the PR (the re-run: it ignores the
+# verify-win marker). An app already open is never killed: the pass is
+# skipped with a needs-graham line instead.
+# GITHUB_TOKEN events start no workflows: the survey push leaves build.yml
+# quiet, and a label added here never fires notify-graham, so the skip and
+# failure lines go to Discord directly, with the same [<repo name>] prefix.
+# Repo variables (set by bts-repo-init):
+#   BTS_RUNNER_WIN     runner labels, JSON list (default below)
+#   BTS_APP_EXE        process name without .exe (the open-app guard)
+#   BTS_APP_NAME       display name for the skip line (default BTS_APP_EXE)
+#   BTS_VERIFY_SCRIPT  PowerShell from the repo root: build + package + launch
+#   BTS_VERIFY_OK      its pass line, matched literally
+#   BTS_VERIFY_LOG     file the pass line is in, repo-relative; empty = output
+#   BTS_SURVEY_SCRIPT  PowerShell from the repo root; $env:TAG is the tag
+#   BTS_SURVEY_OK      its pass line (e.g. the settings-restored line)
+#   BTS_SURVEY_LOG     file that line and any "MISSING <shot>" lines are in
+#   BTS_SURVEY_MIN     fewest JPGs that count as a survey (default 1)
+# TEMP/TMP point at the job's temp folder: the runner is Graham's user, so the
+# scripts must not touch anything his own sessions parked in %TEMP%.
+# From gk1016/bts-template stacks/win-qt (frago plans 2026-11-13-verify-win, 2026-11-14-pipeline-v2).
+name: verify-win
+
+on:
+  workflow_run:
+    workflows: [build]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number
+        required: true
+      tag:
+        description: Survey tag (default pr<N>)
+        required: false
+        default: ""
+  issue_comment:
+    types: [created]
+
+jobs:
+  pass:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'pull_request' && startsWith(github.event.workflow_run.head_branch, 'claude/')) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+        github.event.comment.user.login == 'gk1016' && contains(github.event.comment.body, '/windows-pass'))
+    # Job level (frago ISSUES F19): a run skipped by the if: above never enters
+    # the group. One desktop, one pass at a time; a running pass is never cancelled.
+    concurrency:
+      group: win-desktop
+      cancel-in-progress: false
+    runs-on: ${{ fromJSON(vars.BTS_RUNNER_WIN || '["self-hosted","windows","evo-x2"]') }}
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    defaults:
+      run:
+        shell: powershell
+    env:
+      REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      APP_EXE: ${{ vars.BTS_APP_EXE }}
+      APP_NAME: ${{ vars.BTS_APP_NAME || vars.BTS_APP_EXE }}
+    steps:
+      # Before anything touches the workspace or the desktop.
+      - id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          RUN_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          IN_PR: ${{ inputs.pr }}
+          IN_TAG: ${{ inputs.tag }}
+          ISSUE_N: ${{ github.event.issue.number }}
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          function Out-Kv($k, $v) { [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "$k=$v`n") }
+          function Skip($why) {
+            Write-Output "skip: $why"
+            [IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "verify-win skip: $why`n")
+            Out-Kv go false; exit 0
+          }
+          $n = ''; $tag = ''
+          switch ($env:EVENT) {
+            'workflow_run' {
+              $nums = @(gh pr list --repo $env:REPO --head $env:RUN_BRANCH --state open --json number --jq '.[].number')
+              if ($LASTEXITCODE -ne 0) { throw "gh pr list failed" }
+              if ($nums.Count -ne 1) { Skip "$($nums.Count) open PRs for $env:RUN_BRANCH" }
+              $n = "$($nums[0])".Trim()
+            }
+            'workflow_dispatch' { $n = "$env:IN_PR".Trim(); $tag = "$env:IN_TAG".Trim() }
+            'issue_comment' {
+              $first = "$(("$env:BODY" -split "`r?`n") | Where-Object { $_ -match '^/windows-pass' } | Select-Object -First 1)".Trim()
+              if ($first -notmatch '^/windows-pass(\s+(\S+))?$') { Skip "usage: /windows-pass [tag]; got: $first" }
+              $n = "$env:ISSUE_N"; $tag = "$($Matches[2])"
+            }
+          }
+          if ($n -notmatch '^\d+$') { Skip "not a PR number: $n" }
+          if ($tag -eq '') { $tag = "pr$n" }
+          if ($tag -cnotmatch '^[a-z0-9-]+$') { Skip "survey tag must match [a-z0-9-]+: $tag" }
+          $raw = (gh pr view $n --repo $env:REPO --json number,state,isDraft,author,headRefName,headRefOid,url,title) -join "`n"
+          if ($LASTEXITCODE -ne 0 -or -not $raw) { Skip "no PR #$n" }
+          $pr = $raw | ConvertFrom-Json
+          if ($pr.state -ne 'OPEN') { Skip "PR #$n is $($pr.state)" }
+          # A /windows-pass from Graham also re-runs a PR already marked ready.
+          if (-not $pr.isDraft -and $env:EVENT -ne 'issue_comment') { Skip "PR #$n is not a draft" }
+          if (@('app/claude', 'claude[bot]', 'claude') -notcontains $pr.author.login) { Skip "PR #$n is by $($pr.author.login), not claude[bot]" }
+          $sha = $pr.headRefOid
+          if ($env:EVENT -eq 'workflow_run' -and $sha -ne $env:RUN_SHA) { Skip "build ran on $env:RUN_SHA, PR #$n head is now $sha" }
+          if ($env:EVENT -ne 'issue_comment') {
+            $bodies = (gh api "repos/$env:REPO/issues/$n/comments" --paginate --jq '.[].body') -join "`n"
+            if ($LASTEXITCODE -ne 0) { throw "reading PR #$n comments failed" }
+            if ($bodies.Contains("<!-- verify-win $sha -->")) { Skip "PR #$n at $sha already passed; /windows-pass re-runs" }
+          }
+          Write-Output "PR #$n $($pr.headRefName) @ $sha, survey tag $tag"
+          Out-Kv go true; Out-Kv n $n; Out-Kv sha $sha; Out-Kv tag $tag; Out-Kv url $pr.url
+          Out-Kv draft $pr.isDraft.ToString().ToLower()
+          Out-Kv probe $(if ("$($pr.title)".StartsWith('probe:')) { 'true' } else { 'false' })
+          exit 0
+
+      # Never Stop-Process an app Graham is using. Get-Process sees every
+      # session's processes.
+      - id: guard
+        if: steps.pr.outputs.go == 'true'
+        run: |
+          if (-not $env:APP_EXE) { throw "repo variable BTS_APP_EXE is not set" }
+          $open = [bool](Get-Process $env:APP_EXE -ErrorAction SilentlyContinue)
+          Write-Output "$env:APP_EXE.exe running: $open"
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "open=$($open.ToString().ToLower())`n")
+          exit 0
+
+      - id: skip
+        name: skip notice
+        if: steps.guard.outputs.open == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          N: ${{ steps.pr.outputs.n }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $line = "Windows pass skipped: $env:APP_NAME is open on EVO-X2 - close it and comment ``/windows-pass``"
+          gh pr comment $env:N --repo $env:REPO --body "$line ($env:RUN_URL)"
+          if ($LASTEXITCODE -ne 0) { throw "gh pr comment failed" }
+          gh pr edit $env:N --repo $env:REPO --add-label needs-graham
+          if ($LASTEXITCODE -ne 0) { throw "gh pr edit --add-label failed" }
+          if (-not $env:HOOK) { throw "DISCORD_WEBHOOK is empty" }
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          $name = $env:REPO.Split('/')[1]
+          $content = ([string][char]0x2192) + " [$name] Decide: $($line.Replace('`', '')) on PR #$env:N`n$env:PR_URL"
+          $json = @{ content = $content; allowed_mentions = @{ parse = @() } } | ConvertTo-Json -Compress
+          try {
+            Invoke-RestMethod -Uri $env:HOOK -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($json)) | Out-Null
+          } catch { throw "discord post failed: $($_.Exception.Response.StatusCode)" }
+          Write-Output "skip comment, needs-graham label and Discord line posted for PR #$env:N"
+          exit 0
+
+      # One desktop, several repos (frago ISSUES F29): the win-desktop group
+      # above is per repo, this lock file is per machine. Created atomically
+      # (CreateNew); a holder older than 100 min (past any job's timeout) is
+      # stale and taken over. Waits up to 60 min, then fails.
+      - id: lock
+        name: desktop lock
+        if: steps.guard.outputs.open == 'false'
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $dir = 'C:\actions-runner-locks'
+          $f = Join-Path $dir 'win-desktop.lock'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $me = "$env:GITHUB_REPOSITORY run $env:GITHUB_RUN_ID"
+          $deadline = (Get-Date).AddMinutes(60)
+          while ($true) {
+            try {
+              $s = [IO.File]::Open($f, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
+              $b = [Text.Encoding]::UTF8.GetBytes($me); $s.Write($b, 0, $b.Length); $s.Close()
+              Write-Output "desktop lock taken: $me"
+              break
+            } catch {
+              $item = Get-Item $f -ErrorAction SilentlyContinue
+              if (-not $item) { continue }
+              $holder = "$(Get-Content $f -Raw -ErrorAction SilentlyContinue)".Trim()
+              $age = ((Get-Date) - $item.LastWriteTime).TotalMinutes
+              if ($age -gt 100) {
+                Write-Output "stale lock ($holder, $([int]$age) min): taken over"
+                Remove-Item $f -Force -ErrorAction SilentlyContinue
+                continue
+              }
+              if ((Get-Date) -gt $deadline) { throw "desktop busy for 60 min: $holder" }
+              Write-Output "desktop busy: $holder; waiting"
+              Start-Sleep -Seconds 30
+            }
+          }
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "held=true`n")
+          exit 0
+
+      # persist-credentials false: the scripts run the PR's own code, which
+      # should not find a contents:write token in .git/config. The publish step
+      # passes the token to its one push.
+      - if: steps.guard.outputs.open == 'false' && steps.lock.outputs.held == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.sha }}
+          fetch-depth: 0
+          token: ${{ github.token }}
+          persist-credentials: false
+
+      - id: verify
+        name: verify script
+        if: steps.guard.outputs.open == 'false'
+        env:
+          SHA: ${{ steps.pr.outputs.sha }}
+          SCRIPT: ${{ vars.BTS_VERIFY_SCRIPT }}
+          OK: ${{ vars.BTS_VERIFY_OK }}
+          LOG: ${{ vars.BTS_VERIFY_LOG }}
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          if (-not $env:SCRIPT -or -not $env:OK) { throw "repo variables BTS_VERIFY_SCRIPT and BTS_VERIFY_OK must be set" }
+          if ((git rev-parse HEAD).Trim() -ne $env:SHA) { throw "checkout is not $env:SHA" }
+          $d = Join-Path $env:GITHUB_WORKSPACE '_logs'
+          New-Item -ItemType Directory -Force -Path $d | Out-Null
+          $f = Join-Path $env:RUNNER_TEMP 'bts-verify.ps1'
+          [IO.File]::WriteAllText($f, $env:SCRIPT, (New-Object Text.UTF8Encoding $true))
+          powershell -NoProfile -ExecutionPolicy Bypass -File $f 2>&1 | ForEach-Object { "$_" } | Tee-Object -Variable out | Select-Object -Last 12
+          $own = Join-Path $d 'verify.out.log'
+          [IO.File]::WriteAllLines($own, [string[]]@($out))
+          $where = if ($env:LOG) { Join-Path $env:GITHUB_WORKSPACE $env:LOG } else { $own }
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "log=$where`n")
+          if (-not ((Test-Path $where) -and (Select-String -Path $where -Pattern $env:OK -SimpleMatch -Quiet))) {
+            throw "no '$env:OK' line in $where"
+          }
+          exit 0
+
+      - id: survey
+        name: survey script
+        if: steps.guard.outputs.open == 'false'
+        env:
+          TAG: ${{ steps.pr.outputs.tag }}
+          SCRIPT: ${{ vars.BTS_SURVEY_SCRIPT }}
+          OK: ${{ vars.BTS_SURVEY_OK }}
+          LOG: ${{ vars.BTS_SURVEY_LOG }}
+          MIN: ${{ vars.BTS_SURVEY_MIN || '1' }}
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          if (-not $env:SCRIPT -or -not $env:OK) { throw "repo variables BTS_SURVEY_SCRIPT and BTS_SURVEY_OK must be set" }
+          $d = Join-Path $env:GITHUB_WORKSPACE '_logs'
+          New-Item -ItemType Directory -Force -Path $d | Out-Null
+          $f = Join-Path $env:RUNNER_TEMP 'bts-survey.ps1'
+          [IO.File]::WriteAllText($f, $env:SCRIPT, (New-Object Text.UTF8Encoding $true))
+          powershell -NoProfile -ExecutionPolicy Bypass -File $f 2>&1 | ForEach-Object { "$_" } | Tee-Object -Variable out | Select-Object -Last 4
+          $own = Join-Path $d 'survey.out.log'
+          [IO.File]::WriteAllLines($own, [string[]]@($out))
+          $slog = if ($env:LOG) { Join-Path $env:GITHUB_WORKSPACE $env:LOG } else { $own }
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "log=$slog`n")
+          if (-not ((Test-Path $slog) -and (Select-String -Path $slog -Pattern $env:OK -SimpleMatch -Quiet))) {
+            throw "no '$env:OK' line in $slog"
+          }
+          $dir = Join-Path $env:GITHUB_WORKSPACE "_shots\uipass\survey-$env:TAG"
+          if (-not (Test-Path (Join-Path $dir 'index.md'))) { throw "no index.md in $dir" }
+          $jpgs = @(Get-ChildItem $dir -Filter *.jpg)
+          $missing = @(Select-String -Path $slog -Pattern '^MISSING ' | ForEach-Object { $_.Line })
+          if ($missing.Count) { $missing | ForEach-Object { Write-Output $_ } }
+          if ($jpgs.Count -lt [int]$env:MIN) { throw "$($jpgs.Count) JPGs in $dir, need >= $env:MIN" }
+          $big = @($jpgs | Where-Object { $_.Length -gt 400KB })
+          if ($big.Count) { throw "over 400 KB: $(($big | ForEach-Object { $_.Name }) -join ', ')" }
+          $top = $jpgs | Sort-Object Length -Descending | Select-Object -First 1
+          $kb = [math]::Round($top.Length / 1KB)
+          Write-Output "survey $env:TAG`: $($jpgs.Count) JPGs, largest $($top.Name) $kb KB"
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "count=$($jpgs.Count)`nlargest=$($top.Name)`nlargest_kb=$kb`n")
+          exit 0
+
+      # The scripts' own logs into _logs (some live outside the workspace),
+      # whatever happened above.
+      - id: logs
+        if: always() && steps.guard.outputs.open == 'false'
+        env:
+          VLOG: ${{ vars.BTS_VERIFY_LOG }}
+          SLOG: ${{ vars.BTS_SURVEY_LOG }}
+          BLOG: ${{ vars.BTS_BUILD_LOG }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $d = Join-Path $env:GITHUB_WORKSPACE '_logs'
+          New-Item -ItemType Directory -Force -Path $d | Out-Null
+          foreach ($rel in @($env:VLOG, $env:SLOG, $env:BLOG) | Where-Object { $_ }) {
+            $p = Join-Path $env:GITHUB_WORKSPACE $rel
+            if (Test-Path $p) { Copy-Item $p $d -Force } else { Write-Output "absent: $p" }
+          }
+          # The stored session must never leave the box.
+          if (Select-String -Path (Join-Path $d '*.log') -Pattern 'sessionDpapi' -SimpleMatch -Quiet) {
+            Remove-Item (Join-Path $d '*') -Force
+            throw "a log names sessionDpapi; logs withheld"
+          }
+          exit 0
+
+      - if: always() && steps.logs.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-win-logs
+          path: _logs/
+          if-no-files-found: warn
+
+      - id: publish
+        if: steps.guard.outputs.open == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          N: ${{ steps.pr.outputs.n }}
+          SHA: ${{ steps.pr.outputs.sha }}
+          TAG: ${{ steps.pr.outputs.tag }}
+          COUNT: ${{ steps.survey.outputs.count }}
+          LARGEST: ${{ steps.survey.outputs.largest }}
+          LARGEST_KB: ${{ steps.survey.outputs.largest_kb }}
+          DRAFT: ${{ steps.pr.outputs.draft }}
+          PROBE: ${{ steps.pr.outputs.probe }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+          HOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          VERIFY_OK: ${{ vars.BTS_VERIFY_OK }}
+          SURVEY_OK: ${{ vars.BTS_SURVEY_OK }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          function Must($what) { if ($LASTEXITCODE -ne 0) { throw "$what failed ($LASTEXITCODE)" } }
+          $branch = "ui/survey-$env:TAG"
+          $rel = "_shots/uipass/survey-$env:TAG"
+          # Re-runs replace the PR's own survey; any other existing tag (a
+          # baseline such as w1) is never overwritten.
+          gh api "repos/$env:REPO/git/ref/heads/$branch" --silent
+          if ($LASTEXITCODE -eq 0 -and $env:TAG -ne "pr$env:N") { throw "$branch already exists; pick another tag" }
+          $wt = Join-Path $env:RUNNER_TEMP 'survey-wt'
+          if (Test-Path $wt) { Remove-Item -Recurse -Force $wt }
+          git worktree prune
+          git worktree add --detach $wt origin/main; Must 'git worktree add'
+          try {
+            New-Item -ItemType Directory -Force -Path (Join-Path $wt $rel) | Out-Null
+            Copy-Item (Join-Path $env:GITHUB_WORKSPACE "$rel\*") (Join-Path $wt $rel) -Recurse -Force
+            git -C $wt add -f -- $rel; Must 'git add'
+            git -C $wt -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -q -m "UI survey $env:TAG`: $env:COUNT captures + index.md, packaged exe @ $($env:SHA.Substring(0,7)) (verify-win, PR #$env:N)"
+            Must 'git commit'
+            $auth = 'AUTHORIZATION: basic ' + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("x-access-token:$env:GH_TOKEN"))
+            git -C $wt -c "http.https://github.com/.extraheader=$auth" push -q --force origin "HEAD:refs/heads/$branch"; Must 'git push'
+          } finally {
+            git worktree remove --force $wt
+          }
+          $tree = "$env:GITHUB_SERVER_URL/$env:REPO/tree/$branch/$rel"
+          # The evidence is for $env:SHA only: a commit pushed during the pass
+          # gets its own pass (its build), never this one's ready.
+          $now = "$(gh pr view $env:N --repo $env:REPO --json headRefOid --jq .headRefOid)".Trim(); Must 'gh pr view'
+          $moved = $now -ne $env:SHA
+          $body = @(
+            "**Windows pass OK** for PR #$env:N at ``$env:SHA`` ($env:RUNNER_NAME)",
+            '',
+            "- verify script: ``$env:VERIFY_OK``",
+            "- survey script ``$env:TAG``: $env:COUNT captures, largest ``$env:LARGEST`` $env:LARGEST_KB KB, ``$env:SURVEY_OK``",
+            "- Survey: [$branch]($tree)",
+            "- Logs: $env:RUN_URL (artifact ``verify-win-logs``)"
+          )
+          if ($moved) { $body += "- PR head moved to ``$now`` during the pass: not marked ready; that commit's build starts its own pass." }
+          $body = ($body + @('', "<!-- verify-win $env:SHA -->")) -join "`n"
+          $f = Join-Path $env:RUNNER_TEMP 'verify-win-comment.md'
+          [IO.File]::WriteAllText($f, $body, (New-Object Text.UTF8Encoding $false))
+          gh pr comment $env:N --repo $env:REPO --body-file $f; Must 'gh pr comment'
+          if ($env:DRAFT -eq 'true' -and -not $moved) { gh pr ready $env:N --repo $env:REPO; Must 'gh pr ready' }
+          # gh pr ready with github.token starts no workflow, so notify-graham
+          # never sees this PR become ready: the Decide line goes from here.
+          # Not for "probe:" PRs (pipeline housekeeping). A failed post does
+          # not fail a pass that already succeeded.
+          if (-not $moved -and $env:PROBE -ne 'true' -and $env:HOOK) {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            $name = $env:REPO.Split('/')[1]
+            $content = ([string][char]0x2192) + " [$name] Decide: review PR #$env:N (Windows pass OK, $env:COUNT captures)`n$env:PR_URL"
+            $json = @{ content = $content; allowed_mentions = @{ parse = @() } } | ConvertTo-Json -Compress
+            try {
+              Invoke-RestMethod -Uri $env:HOOK -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($json)) | Out-Null
+              Write-Output "Decide line posted"
+            } catch { Write-Output "warning: discord post failed: $($_.Exception.Response.StatusCode)" }
+          } else { Write-Output "no Decide line (head moved: $moved, probe: $env:PROBE)" }
+          Write-Output "PR #${env:N}: survey on $branch, evidence comment posted, head moved: $moved"
+          exit 0
+
+      # Whatever happened above, give the desktop back - only our own lock.
+      - name: desktop unlock
+        if: always() && steps.lock.outputs.held == 'true'
+        run: |
+          $f = 'C:\actions-runner-locks\win-desktop.lock'
+          $me = "$env:GITHUB_REPOSITORY run $env:GITHUB_RUN_ID"
+          $holder = "$(Get-Content $f -Raw -ErrorAction SilentlyContinue)".Trim()
+          if ($holder -eq $me) { Remove-Item $f -Force; Write-Output "desktop lock released: $me" }
+          else { Write-Output "lock is not ours ($holder); left alone" }
+          exit 0
+
+      # The job also fails, so notify-graham's workflow_run rule posts a second
+      # "Look:" line (its branch reads main): accepted, rare path.
+      - name: failure notice
+        if: (failure() || cancelled()) && steps.pr.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          N: ${{ steps.pr.outputs.n }}
+          SHA: ${{ steps.pr.outputs.sha }}
+          VLOG: ${{ steps.verify.outputs.log }}
+          O_GUARD: ${{ steps.guard.outcome }}
+          O_SKIP: ${{ steps.skip.outcome }}
+          O_LOCK: ${{ steps.lock.outcome }}
+          O_VERIFY: ${{ steps.verify.outcome }}
+          O_SURVEY: ${{ steps.survey.outcome }}
+          O_LOGS: ${{ steps.logs.outcome }}
+          O_PUBLISH: ${{ steps.publish.outcome }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $at = 'timeout or cancel'
+          foreach ($s in @(@('guard', $env:O_GUARD), @('skip notice', $env:O_SKIP), @('desktop lock', $env:O_LOCK),
+                           @('verify script', $env:O_VERIFY), @('survey script', $env:O_SURVEY), @('logs', $env:O_LOGS),
+                           @('publish', $env:O_PUBLISH))) {
+            if ($s[1] -eq 'failure') { $at = $s[0]; break }
+          }
+          # checkout has no id: the lock was taken, nothing after it ran -> checkout.
+          if ($at -eq 'timeout or cancel' -and $env:O_LOCK -eq 'success' -and $env:O_VERIFY -eq 'skipped') { $at = 'checkout' }
+          $body = @("**Windows pass failed** at **$at** for PR #$env:N (``$env:SHA``).", '')
+          $abort = @()
+          if ($env:VLOG -and (Test-Path $env:VLOG)) { $abort = @(Select-String -Path $env:VLOG -Pattern '^ABORT: ' | ForEach-Object { $_.Line }) }
+          if ($abort.Count) { $body += "verify log: ``$($abort[0])``" }
+          if ($abort -match 'no window capture') {
+            # Stop-and-ask: the runner has no desktop; the logon task type is Graham's to change.
+            $qs = (query session) -join "`n"
+            $body += @('', 'No window capture: the runner is not in the interactive session (session 0?). `query session`:', '```', $qs, '```')
+          }
+          $body += @('', "Logs: $env:RUN_URL (artifact ``verify-win-logs``). Re-run: comment ``/windows-pass``.")
+          $f = Join-Path $env:RUNNER_TEMP 'verify-win-failure.md'
+          [IO.File]::WriteAllText($f, ($body -join "`n"), (New-Object Text.UTF8Encoding $false))
+          gh pr comment $env:N --repo $env:REPO --body-file $f
+          if ($LASTEXITCODE -ne 0) { Write-Output "gh pr comment failed" }
+          gh pr edit $env:N --repo $env:REPO --add-label needs-graham
+          if ($LASTEXITCODE -ne 0) { Write-Output "gh pr edit --add-label failed" }
+          if (-not $env:HOOK) { throw "DISCORD_WEBHOOK is empty" }
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          $name = $env:REPO.Split('/')[1]
+          $content = ([string][char]0x2192) + " [$name] Look: verify-win failed at $at on PR #$env:N`n$env:RUN_URL"
+          $json = @{ content = $content; allowed_mentions = @{ parse = @() } } | ConvertTo-Json -Compress
+          try {
+            Invoke-RestMethod -Uri $env:HOOK -Method Post -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($json)) | Out-Null
+          } catch { throw "discord post failed: $($_.Exception.Response.StatusCode)" }
+          exit 0

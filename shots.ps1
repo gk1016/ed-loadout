@@ -109,6 +109,16 @@ if ($Survey) {
             Shoot 'settings' $th ($with + @('--tab', 'settings')) "``qml/SettingsPage.qml``, ``qml/Field.qml``, $main" 'folders, theme, about'
             Shoot 'confirm' $th ($with + @('--tab', 'home', '--confirm')) "``qml/ConfirmApply.qml``, ``qml/HomePage.qml``, $main" 'the APPLY confirm: files and backup folder'
         }
+        # Game running. LOADOUT_FAKE_GAME_RUNNING is read by debug builds of the core only, so
+        # these two come from build\loadout-dbgcore.exe: the same shell and QML on the debug core.
+        $twin = Join-Path $root 'build\loadout-dbgcore.exe'
+        if (Test-Path (Join-Path $root 'build\qml')) { Copy-Item (Join-Path $root 'qml\*') (Join-Path $root 'build\qml') -Recurse -Force }
+        $env:LOADOUT_FAKE_GAME_RUNNING = '1'
+        try {
+            foreach ($th in 'deepfield', 'daylight') {
+                Shoot 'home-game-running' $th ($with + @('--tab', 'home')) "``qml/HomePage.qml``, $main" 'Elite running (faked, debug-core twin): APPLY and RESTORE off, GAME red' 5000 $twin
+            }
+        } finally { Remove-Item Env:\LOADOUT_FAKE_GAME_RUNNING }
         # LOG last: these two runs really apply (into the scratch Options dir), so the page holds real lines.
         foreach ($th in 'deepfield', 'daylight') {
             Shoot 'log' $th ($with + @('--tab', 'home', '--script', 'apply,log')) "``qml/LogPage.qml``, $main" 'after APPLY: the lines the CLI prints' 6000

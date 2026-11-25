@@ -87,6 +87,48 @@ if (-not (Test-Path $shot)) { Fail "no window capture" }
 if (Test-Path $profiles) { Fail "opening the app created the profiles folder" }
 L "run OK, capture $shot"
 
+L "--- scripted run: CAPTURE THIS MACHINE, select, APPLY (confirm), LOG ---"
+$r = Run (Join-Path $dist 'loadout.exe') @('--script', 'capture,apply') 7000
+Need $r 'script: capture ok=true profiles=1 selected=\S+' "capture did not create and select a profile"
+$made = @(Get-ChildItem $profiles -Directory | Where-Object { Test-Path (Join-Path $_.FullName 'profile.toml') })
+if ($made.Count -ne 1) { Fail "expected one profile under $profiles, found $($made.Count)" }
+L "profile created: $($made[0].FullName)"
+Need $r 'select: \S+, \d+ effective rows, [1-9]\d* files to write' "selecting the profile did not fill WILL APPLY"
+Need $r 'script: apply enabled=true' "APPLY was not enabled"
+Need $r 'script: confirm open=true files=[1-9]\d* backup under .+_loadout-backup' "the confirm did not open with the file list and the backup path"
+Need $r 'core: backup: .+_loadout-backup' "apply logged no backup"
+Need $r 'core: wrote Graphics/DisplaySettings.xml' "apply logged no written file"
+Need $r 'script: applied; Applied \S+ Backup \d{8}-\d{6}-\d{3}\. log lines=[1-9]' "apply did not report success with log lines"
+$applied = Hashes $opts
+if (-not (Compare-Object $before $applied)) { Fail "apply changed nothing in the scratch Options dir" }
+L ("apply changed: " + ((Compare-Object $before $applied | Where-Object SideIndicator -eq '=>' | ForEach-Object { ($_.InputObject -split ' ')[0] }) -join ', '))
+
+L "--- scripted run: RESTORE LAST BACKUP ---"
+$r = Run (Join-Path $dist 'loadout.exe') @('--script', 'restore') 6000
+Need $r 'script: restore ok=true; Restored backup \d{8}-\d{6}-\d{3}\.' "restore did not report success"
+$after = Hashes $opts
+$diff = Compare-Object $before $after
+if ($diff) { L ($diff | Out-String); Fail "Options dir differs after restore" }
+L ("restore OK: " + $before.Count + " files, same file set, same SHA-256 as before the apply (Get-FileHash; _loadout-backup left out)")
+
+L "--- game running: LOADOUT_FAKE_GAME_RUNNING=1, read by debug builds of the core only ---"
+# The packaged (release) exe must ignore the variable. build\loadout-dbgcore.exe
+# is the same shell on the debug core: there APPLY must be off, the confirm
+# must not open, and nothing may be written.
+$env:LOADOUT_FAKE_GAME_RUNNING = '1'
+try {
+    $r = Run (Join-Path $dist 'loadout.exe') @('--select', $made[0].Name) 4000
+    Need $r 'home: detected=true profiles=1 selected=\S+ game=false apply enabled=true' "the release build read LOADOUT_FAKE_GAME_RUNNING"
+    L "release build: variable ignored (game=false, APPLY enabled)"
+    $r = Run (Join-Path $root 'build\loadout-dbgcore.exe') @('--select', $made[0].Name, '--script', 'apply,restore') 6000
+    Need $r 'home: detected=true profiles=1 selected=\S+ game=true apply enabled=false' "debug core: the game-running state did not disable APPLY"
+    Need $r 'script: apply enabled=false' "debug core: APPLY stayed enabled"
+    Need $r 'script: confirm open=false' "debug core: the confirm opened while the game runs"
+    Need $r 'script: restore ok=false; refusing: EliteDangerous64.exe is running' "debug core: RESTORE was not refused"
+} finally { Remove-Item Env:\LOADOUT_FAKE_GAME_RUNNING }
+if (Compare-Object $before (Hashes $opts)) { Fail "something was written while the game was (faked) running" }
+L "debug core: game=true, APPLY disabled, confirm closed, RESTORE refused, Options dir unchanged"
+
 Remove-Item $scratch -Recurse -Force -ErrorAction SilentlyContinue
 L "=== VERIFY OK (no release) ==="
 exit 0

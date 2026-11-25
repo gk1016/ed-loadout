@@ -92,6 +92,31 @@ endfunction()
 
 loadout_shell(loadout "${RUST_LIB}" rust_core)
 
+# ---- the debug-core twin: build\loadout-dbgcore.exe (never packaged)
+# LOADOUT_FAKE_GAME_RUNNING=1 is read by debug builds of the core only. This
+# is the same shell linked against the debug core, so ship.ps1 and shots.ps1
+# can show the game-running state without the game. It sits in build\ beside
+# the deployed Qt runtime; package.ps1 copies loadout.exe by name, not this.
+if (NOT CMAKE_BUILD_TYPE STREQUAL "Debug")
+    set(RUST_LIB_DEBUG "${RUST_TARGET}/debug/loadout_core.lib")
+    add_custom_target(rust_core_debug ALL
+        COMMAND cargo build
+        WORKING_DIRECTORY "${RUST_DIR}"
+        BYPRODUCTS "${RUST_LIB_DEBUG}"
+        COMMENT "cargo build, debug (loadout-core, for loadout-dbgcore)"
+        USES_TERMINAL
+        VERBATIM
+    )
+    # One cargo at a time in rust/target.
+    add_dependencies(rust_core_debug rust_core)
+    qt_add_executable(loadout-dbgcore
+        cpp/main.cpp
+        cpp/core.cpp
+        cpp/core.h
+    )
+    loadout_shell(loadout-dbgcore "${RUST_LIB_DEBUG}" rust_core_debug)
+endif()
+
 # QML, fonts and icons beside the binary (edit .qml, re-run; no rebuild).
 add_custom_command(TARGET loadout POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory

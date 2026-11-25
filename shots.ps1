@@ -58,7 +58,9 @@ function Launch([string[]]$argv, [string]$png, [int]$ms, [string]$exe = (Join-Pa
 }
 
 if ($Survey) {
-    if ($Survey -notmatch '^[a-z0-9-]+$') { throw "survey tag must match [a-z0-9-]+" }
+    # A dot is allowed: code-wave's slug is the plan file name without its date
+    # (loadout-v0.3-desktop), and the folder and branch are named after it.
+    if ($Survey -notmatch '^[a-z0-9][a-z0-9.-]*$') { throw "survey tag must match [a-z0-9][a-z0-9.-]*" }
     Add-Type -AssemblyName System.Drawing
     Add-Type -Namespace LoadoutShots -Name Win -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
